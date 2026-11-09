@@ -17,7 +17,7 @@ class PumpWatchdogTest(unittest.TestCase):
         now = [Time(nanoseconds=1_000_000_000)]
         consumer = SimpleNamespace(get_clock=lambda: SimpleNamespace(now=lambda: now[0]),
             actuation=Mock(), require_px4_armed=False, _pump_until=None, _last_msg=now[0], cmd_timeout=.6,
-            _velocity=0., _steering=0., steering_sign=1., velocity_sign=1.)
+            _velocity=0., _steering=0., steering_sign=1., velocity_sign=1., _speed_controller=None)
         with patch.object(module.time, 'monotonic', return_value=1.):
             module.twist_consumer.pump_cb.callback(consumer, Float32(data=35.))
         consumer.actuation.send_xtr.assert_called_with(xtr1=35.)

@@ -18,12 +18,13 @@ import rclpy
 import rclpy.clock
 import tf2_ros
 from tf_transformations import quaternion_from_euler
-from geometry_msgs.msg import TransformStamped
+from geometry_msgs.msg import TransformStamped, TwistWithCovarianceStamped
 from nav_msgs.msg import Odometry
 from mavros_msgs.msg import ManualControl
 
 from svea_core import rosonic as rx
 from svea_core.models.bicycle import Bicycle4DWithESC
+from svea_core.models.drivetrain import WheelEncoderSim, esc_speed
 
 class sim_svea(rx.Node):
     """
@@ -67,6 +68,16 @@ class sim_svea(rx.Node):
 
     publish_tf = rx.Parameter(True)
 
+    # Realistic drive: ESC deadband, throttle gain error and a quantized wheel
+    # encoder on the same topic as the car. Off keeps the ideal simulator.
+    realistic_drive = rx.Parameter(False)
+    esc_deadband = rx.Parameter(0.15)          # [m/s] commands below this do not move
+    esc_gain = rx.Parameter(0.8)               # speed per m/s of command above the deadband
+    wheel_radius = rx.Parameter(0.055)         # [m]
+    encoder_ticks_per_rev = rx.Parameter(80)
+    encoder_rate = rx.Parameter(20.0)          # [Hz]
+    encoder_top = rx.Parameter('mavros/wheel_odometry/velocity')
+
     ## Publishers ##
     odometry_pub = rx.Publisher(Odometry, odometry_top)
 
@@ -108,6 +119,16 @@ class sim_svea(rx.Node):
 
         self.create_timer(self.time_step, self.sim_loop)
 
+        self.encoder = None
+        if self.realistic_drive:
+            self.encoder = WheelEncoderSim(self.wheel_radius, self.encoder_ticks_per_rev)
+            self.encoder_pub = self.create_publisher(
+                TwistWithCovarianceStamped, self.encoder_top, 10)
+            self.create_timer(1.0 / self.encoder_rate, self.encoder_loop)
+            self.get_logger().info(
+                f'Realistic drive: ESC deadband {self.esc_deadband} m/s, gain '
+                f'{self.esc_gain}, encoder on "{self.encoder_top}"')
+
     def sim_loop(self):
         curr_time = self.clock.now().to_msg()
 
@@ -120,7 +141,12 @@ class sim_svea(rx.Node):
         if not (curr_time.sec - self.last_ctrl_time.sec) < self.CTRL_WAIT_TIME:
             steering, velocity = 0.0, 0.0
 
+        if self.realistic_drive:
+            velocity = esc_speed(velocity, self.esc_deadband, self.esc_gain)
+
         self.model.update(steering, velocity, dt=self.time_step)
+        if self.encoder is not None:
+            self.encoder.advance(self.model.state[3], self.time_step)
 
         # update the state message
         x, y, yaw, vel = self.model.state
@@ -145,6 +171,13 @@ class sim_svea(rx.Node):
         self.odometry_pub.publish(odom_msg)
         self.last_pub_time = self.clock.now().to_msg()
             
+
+    def encoder_loop(self):
+        msg = TwistWithCovarianceStamped()
+        msg.header.stamp = self.clock.now().to_msg()
+        msg.header.frame_id = self.base_frame
+        msg.twist.twist.linear.x = self.encoder.read_speed(1.0 / self.encoder_rate)
+        self.encoder_pub.publish(msg)
 
     def _percent_to_steer(self, steering):
         """Convert radians to percent of max steering actuation"""

@@ -18,6 +18,12 @@
   <arg name="lli_serial_device" default="/dev/serial/by-id/usb-SVEA_PX4_AUTOPILOT_0-if00"/>
   <arg name="lli_baud_rate" default="921600"/>
   <arg name="max_velocity" default="0.8"/>
+  <!-- Closed-loop speed on the wheel encoders. realistic_sim adds an ESC
+       deadband and a quantized encoder to the simulator for trying it. -->
+  <arg name="speed_control" default="false"/>
+  <arg name="speed_feedback_topic" default="mavros/wheel_odometry/velocity"/>
+  <arg name="speed_min_command" default="0.0"/>
+  <arg name="realistic_sim" default="false"/>
 
   <!-- Localization: enable when the corresponding sensors are ready. -->
   <arg name="use_localization" default="false"/>
@@ -101,6 +107,7 @@
     <arg name="is_indoor" value="$(var is_indoor)"/>
     <arg name="use_lidar" value="$(var use_lidar)"/>
     <arg name="use_rtk" value="$(var use_rtk)"/>
+    <arg name="realistic_sim" value="$(var realistic_sim)"/>
   </include>
 
 
@@ -146,6 +153,9 @@
       <param name="require_px4_armed" value="$(eval '&quot;$(var is_sim)&quot; != &quot;true&quot;')"/>
       <param name="max_velocity" value="$(var max_velocity)"/>
       <param name="cmd_timeout" value="0.25"/>
+      <param name="speed_control" value="$(var speed_control)"/>
+      <param name="speed_feedback_topic" value="$(var speed_feedback_topic)"/>
+      <param name="speed_min_command" value="$(var speed_min_command)" type="float"/>
     </node>
     <include if="$(var simulate_payload)" file="$(find-pkg-share peaceofmine_operator)/launch/arm_servo.launch.xml">
       <arg name="simulation" value="true"/>

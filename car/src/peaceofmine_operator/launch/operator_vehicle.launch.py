@@ -12,7 +12,7 @@ from launch_ros.actions import Node
 DEFAULTS = dict(name='self', is_sim='true', initial_pose_x='0.0', initial_pose_y='0.0',
                 initial_pose_a='0.0', lli_serial_device='/dev/serial/by-id/usb-SVEA_PX4_AUTOPILOT_0-if00',
                 lli_baud_rate='921600', use_localization='false', is_indoor='true',
-                use_lidar='false', use_rtk='false')
+                use_lidar='false', use_rtk='false', realistic_sim='false')
 
 
 def bringup(context):
@@ -24,6 +24,7 @@ def bringup(context):
         actions.append(Node(package='svea_core', executable='sim_svea.py', name='sim_svea',
                             namespace=name, output='screen', parameters=[{
                                 **{key: float(values[key]) for key in ('initial_pose_x', 'initial_pose_y', 'initial_pose_a')},
+                                'realistic_drive': IfCondition(LaunchConfiguration('realistic_sim')).evaluate(context),
                                 'map_frame': 'map', 'odom_frame': f'{name}/odom', 'base_frame': f'{name}/base_link'}]))
     else:
         path = Path(get_package_share_directory('svea_core')) / 'launch/lli.xml'

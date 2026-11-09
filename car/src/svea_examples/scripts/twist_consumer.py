@@ -3,9 +3,11 @@
 import math
 import time
 
+from rclpy.qos import qos_profile_sensor_data
 from svea_core import rosonic as rx
+from svea_core.controllers.speed import SpeedController
 from svea_core.interfaces import ActuationInterface
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Twist, TwistWithCovarianceStamped
 from std_msgs.msg import Float32
 from mavros_msgs.msg import State
 
@@ -29,6 +31,20 @@ class twist_consumer(rx.Node):
     pump_top     = rx.Parameter('actuation/pump_percent')
     require_px4_armed = rx.Parameter(False)
 
+    # Closed-loop speed control on measured wheel speed. Off keeps open loop.
+    speed_control = rx.Parameter(False)
+    speed_feedback_topic = rx.Parameter('mavros/wheel_odometry/velocity')
+    speed_feedback_sign = rx.Parameter(1.0)
+    speed_kp = rx.Parameter(0.6)
+    speed_ki = rx.Parameter(1.2)
+    speed_kff = rx.Parameter(1.0)
+    speed_min_command = rx.Parameter(0.0)      # [m/s] ESC deadband offset
+    speed_max_command = rx.Parameter(0.4)      # [m/s] output limit
+    speed_accel_limit = rx.Parameter(0.3)      # [m/s^2]
+    speed_filter_tau = rx.Parameter(0.3)       # [s]
+    speed_feedback_timeout = rx.Parameter(0.3) # [s]
+    speed_stall_timeout = rx.Parameter(2.0)    # [s]
+
     actuation = ActuationInterface()
 
     _velocity = 0.0
@@ -37,6 +53,7 @@ class twist_consumer(rx.Node):
     _pump_until = None
     _armed_until = 0.
     _state_stamp = 0
+    _speed_controller = None
 
     def on_startup(self):
         if self.twist_type not in ("geometry_msgs/msg/Twist",
@@ -52,6 +69,27 @@ class twist_consumer(rx.Node):
         self._last_msg = self.get_clock().now()
         self.get_logger().info(
             f'twist_consumer listening on "{self.twist_top}" ({self.twist_type})')
+
+        if self.speed_control:
+            self._speed_controller = SpeedController(
+                kp=self.speed_kp, ki=self.speed_ki, kff=self.speed_kff,
+                min_command=self.speed_min_command,
+                max_command=self.speed_max_command,
+                accel_limit=self.speed_accel_limit,
+                filter_tau=self.speed_filter_tau,
+                feedback_timeout=self.speed_feedback_timeout,
+                stall_timeout=self.speed_stall_timeout)
+            self._speed_status = None
+            self.create_subscription(TwistWithCovarianceStamped,
+                                     self.speed_feedback_topic,
+                                     self.speed_feedback_cb,
+                                     qos_profile_sensor_data)
+            self.get_logger().info(
+                f'Closed-loop speed control on "{self.speed_feedback_topic}"')
+
+    def speed_feedback_cb(self, msg):
+        speed = self.speed_feedback_sign * msg.twist.twist.linear.x
+        self._speed_controller.update_measurement(speed, time.monotonic())
 
     def _omega_to_steering(self, v, w):
         """Ackermann steering with a speed floor so steering also works at rest."""
@@ -113,8 +151,27 @@ class twist_consumer(rx.Node):
             self._velocity = 0.0
             self._steering = 0.0
 
+        velocity = self._velocity
+        if self._speed_controller is not None:
+            velocity = self._speed_controller.update(velocity, now)
+            self._log_speed_status()
+
         self.actuation.send_control(self._steering * self.steering_sign,
-                                    self._velocity * self.velocity_sign)
+                                    velocity * self.velocity_sign)
+
+    def _log_speed_status(self):
+        controller = self._speed_controller
+        status = controller.fault or controller.status
+        if status == self._speed_status:
+            return
+        self._speed_status = status
+        if controller.fault:
+            self.get_logger().error(f'Speed control stopped the car: {controller.fault}')
+        elif status == 'no feedback':
+            self.get_logger().warning(
+                f'Speed control is waiting for wheel speed on "{self.speed_feedback_topic}"')
+        else:
+            self.get_logger().info(f'Speed control: {status}')
 
 
 if __name__ == '__main__':
