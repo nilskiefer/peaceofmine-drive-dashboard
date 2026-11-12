@@ -3059,13 +3059,14 @@ function initializeCameraSettings() {
   requestAnimationFrame(previewLoop);
 }
 
-function armSetupForm({section, fields, save, status, describe, invalid, applies, preview, allowUnset = false}) {
+function armSetupForm({section, fields, save, status, describe, invalid, applies, preview, allowUnset = false, readSaved, validate, unavailable = 'Waiting for car settings.', record = {}, readRecord}) {
   const inputs = Object.entries(fields).map(([key, id]) => [key, $(id)]);
   const button = $(save), feedback = $(status);
   let dirty = false, pending = null, message = '';
 
   function render() {
-    const saved = state.settings?.[section];
+    const stored = state.settings?.[section];
+    const saved = readSaved ? readSaved(stored) : stored;
     const available = state.connected && inputs.every(([key]) => Number.isFinite(saved?.[key]));
     const editable = available || (allowUnset && state.connected && Object.hasOwn(state.settings || {}, section));
     const owner = state.connected && state.drive.you_control_owner;
@@ -3074,7 +3075,7 @@ function armSetupForm({section, fields, save, status, describe, invalid, applies
       dirty = false;
       message = '';
     } else if (pending) {
-      if (available && inputs.every(([key]) => pending.value[key] === saved[key])) {
+      if (available && inputs.every(([key]) => pending.value[key] === stored?.[key])) {
         pending = null;
         dirty = false;
         message = 'Saved on car. ' + applies;
@@ -3087,6 +3088,7 @@ function armSetupForm({section, fields, save, status, describe, invalid, applies
       const value = available ? String(saved[key]) : '';
       if (!dirty && input.value !== value) input.value = value;
       input.readOnly = !owner || !editable || Boolean(pending);
+      input.setCustomValidity('');
       if (input.hasAttribute('data-positive'))
         input.setCustomValidity(input.valueAsNumber <= 0 ? 'Enter a value greater than zero.' : '');
     }
@@ -3095,10 +3097,16 @@ function armSetupForm({section, fields, save, status, describe, invalid, applies
       if (slow.valueAsNumber > $('probe-retract-speed').valueAsNumber)
         slow.setCustomValidity('Slow retract must not exceed fast retract.');
     }
+    const values = Object.fromEntries(inputs.map(([key, input]) => [key, input.valueAsNumber]));
+    const errors = validate?.(values) || {};
+    for (const [key, input] of inputs) {
+      if (errors[key]) input.setCustomValidity(errors[key]);
+      if (record[key]) $(record[key]).disabled = input.readOnly || !Number.isFinite(readRecord?.());
+    }
     const valid = inputs.every(([, input]) => Number.isFinite(input.valueAsNumber) && input.validity.valid);
-    const changed = editable && (!available || inputs.some(([key, input]) => input.valueAsNumber !== saved[key]));
+    const changed = editable && (!available || inputs.some(([key, input]) => !Number.isFinite(stored?.[key]) || input.valueAsNumber !== saved[key]));
     button.disabled = !owner || !editable || Boolean(pending) || !valid || !changed;
-    feedback.textContent = !editable ? 'Waiting for car settings.'
+    feedback.textContent = !editable ? unavailable
       : !owner ? 'Take control to edit.'
       : pending ? 'Saving…' : message
       || (!valid ? invalid : changed ? available ? `Unsaved change. The car uses ${describe(saved)}.` : 'Save all four measurements to enable guidance.' : applies);
@@ -3109,6 +3117,12 @@ function armSetupForm({section, fields, save, status, describe, invalid, applies
     dirty = true;
     message = '';
     render();
+  };
+  for (const [key, input] of inputs) if (record[key]) $(record[key]).onclick = () => {
+    const value = readRecord?.();
+    if ($(record[key]).disabled || input.readOnly || !Number.isFinite(value)) return;
+    input.value = String(value);
+    input.oninput();
   };
   button.onclick = () => {
     if (button.disabled || !inputs.every(([, input]) => input.reportValidity())) return;
@@ -3157,7 +3171,52 @@ function showScanCoverage() {
   if (output.value !== description) output.value = description;
 }
 
+function armSweepCalibration() {
+  const arm = state.actuators?.arm || ((state.arm_servo?.active_role || 'arm') === 'arm' ? state.arm_servo : null);
+  const calibration = arm?.calibration ?? arm?.arm_calibration;
+  return state.connected && arm?.connected && ['minimum', 'center', 'maximum'].every(key => Number.isFinite(calibration?.[key]))
+    && calibration.minimum < calibration.center && calibration.center < calibration.maximum ? {arm, calibration} : null;
+}
+
+function savedArmSweep(saved) {
+  const calibrated = armSweepCalibration();
+  if (!calibrated) return null;
+  if (Number.isFinite(saved?.minimum_deg) && Number.isFinite(saved?.maximum_deg)) return saved;
+  const {calibration} = calibrated;
+  return {minimum_deg:(calibration.minimum - calibration.center) * 360 / 4096,
+    maximum_deg:(calibration.maximum - calibration.center) * 360 / 4096};
+}
+
+function validateArmSweep(value) {
+  const calibrated = armSweepCalibration();
+  if (!calibrated) return {};
+  const {calibration} = calibrated;
+  const right = Math.round(calibration.center + value.minimum_deg * 4096 / 360);
+  const left = Math.round(calibration.center + value.maximum_deg * 4096 / 360);
+  const errors = {};
+  if (Number.isFinite(value.minimum_deg) && Number.isFinite(value.maximum_deg)
+      && (value.minimum_deg >= value.maximum_deg || right >= left))
+    errors.maximum_deg = 'The left limit must be greater than the right limit by at least one encoder tick.';
+  if (right < calibration.minimum || right > calibration.maximum)
+    errors.minimum_deg = 'Keep the right limit within the saved physical arm limits.';
+  if (left < calibration.minimum || left > calibration.maximum)
+    errors.maximum_deg = 'Keep the left limit within the saved physical arm limits.';
+  return errors;
+}
+
+function currentArmSweepAngle() {
+  const calibrated = armSweepCalibration();
+  if (!calibrated || calibrated.arm.torque !== false || calibrated.arm.moving !== false || !Number.isFinite(calibrated.arm.position)) return null;
+  return (calibrated.arm.position - calibrated.calibration.center) * 360 / 4096;
+}
+
 const armSetupForms = new Map([
+  ['arm_sweep', armSetupForm({section:'arm_sweep', fields:{minimum_deg:'arm-sweep-minimum', maximum_deg:'arm-sweep-maximum'},
+    save:'arm-sweep-save', status:'arm-sweep-status', readSaved:savedArmSweep, validate:validateArmSweep,
+    record:{minimum_deg:'arm-sweep-record-minimum', maximum_deg:'arm-sweep-record-maximum'}, readRecord:currentArmSweepAngle,
+    describe:saved => `${saved.minimum_deg}° to ${saved.maximum_deg}° relative to arm centre`,
+    unavailable:'Connect and save the arm limits to edit the sweep range.',
+    invalid:'Enter ordered right and left angles within the saved physical arm limits.', applies:'Applies to the next search sweep or Confirm arc.'})],
   ['probe_guidance', armSetupForm({section:'probe_guidance', allowUnset:true,
     fields:{pivot_x_m:'guidance-pivot-x',pivot_y_m:'guidance-pivot-y',coil_radius_m:'guidance-coil-radius',probe_radius_m:'guidance-probe-radius'},
     save:'guidance-save', status:'guidance-settings-status', describe:() => 'the saved geometry',

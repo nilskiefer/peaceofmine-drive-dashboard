@@ -11,6 +11,32 @@ from test_arm_node import module
 
 
 class SettingsServiceTest(unittest.TestCase):
+    def test_sweep_range_is_saved_separately_and_cannot_exceed_physical_arm(self):
+        rclpy.init()
+        with tempfile.TemporaryDirectory() as tmp:
+            path=str(Path(tmp)/'operator_config.json')
+            physical=dict(servo_id=1,minimum=1024,center=2048,maximum=3072)
+            configuration.save_section(path,'arm',physical)
+            params=[Parameter('config_file',value=path)]
+            node_type=module('operator_settings_node').OperatorSettings
+            node=node_type(parameter_overrides=params)
+            try:
+                valid=dict(minimum_deg=-22.5,maximum_deg=45.)
+                request=dict(request_id='sweep-range',section='arm_sweep',value=valid)
+                node.command(String(data=json.dumps(request)))
+                self.assertEqual(configuration.load(path)['arm_sweep'],valid)
+                self.assertEqual(configuration.load(path)['arm'],physical)
+                bad=SaveSettings.Request(section='arm_sweep',value_json=json.dumps(dict(minimum_deg=-100.,maximum_deg=45.)))
+                response=node.save(bad,SaveSettings.Response())
+                self.assertFalse(response.success)
+                self.assertEqual(configuration.load(path)['arm_sweep'],valid)
+                node.destroy_node()
+                node=node_type(parameter_overrides=params)
+                self.assertEqual(node.shared['arm_sweep'],valid)
+            finally:
+                node.destroy_node()
+                rclpy.shutdown()
+
     def test_guidance_requires_measurements_and_survives_settings_restart(self):
         rclpy.init()
         with tempfile.TemporaryDirectory() as tmp:

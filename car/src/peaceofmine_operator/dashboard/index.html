@@ -488,19 +488,34 @@
             <input id="arm-position-slider" type="range" min="0" max="4095" step="1" value="0" disabled>
           </section>
           <section class="set-card">
-            <header class="card-head"><h4><span class="step">3</span>Record the limits <span class="tip" data-tip="Left is the higher encoder angle. Move with the position slider, then record each position. Saving updates the captured positions. Unrecorded rows keep their saved positions. Hold Go to move to the saved position in that row."></span></h4></header>
+            <header class="card-head"><h4><span class="step">3</span>Record the limits <span class="tip" data-tip="Left is the higher encoder angle. Move with the position slider, then record each position. Release the motor before recording. Saving updates the captured positions. Unrecorded rows keep their saved positions. These physical limits also apply to the position slider and probe scans."></span></h4></header>
             <div class="table-wrap">
               <table class="set-table arm-points-table">
                 <thead><tr><th scope="col">Limit</th><th scope="col">Captured</th><th scope="col">Saved</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
                 <tbody>
-                  <tr><th scope="row">Left</th><td><output id="arm-recorded-maximum">—</output></td><td><output id="arm-saved-maximum">—</output></td><td class="cell-actions"><button type="button" id="arm-capture-maximum" aria-label="Record left limit">Record</button><button type="button" id="arm-move-maximum" class="quiet" aria-label="Go to saved left limit">Go</button></td></tr>
-                  <tr><th scope="row">Centre</th><td><output id="arm-recorded-center">—</output></td><td><output id="arm-saved-center">—</output></td><td class="cell-actions"><button type="button" id="arm-capture-center" aria-label="Record centre">Record</button><button type="button" id="arm-move-center" class="quiet" aria-label="Go to saved centre">Go</button></td></tr>
-                  <tr><th scope="row">Right</th><td><output id="arm-recorded-minimum">—</output></td><td><output id="arm-saved-minimum">—</output></td><td class="cell-actions"><button type="button" id="arm-capture-minimum" aria-label="Record right limit">Record</button><button type="button" id="arm-move-minimum" class="quiet" aria-label="Go to saved right limit">Go</button></td></tr>
+                  <tr><th scope="row">Left</th><td><output id="arm-recorded-maximum">—</output></td><td><output id="arm-saved-maximum">—</output></td><td class="cell-actions"><button type="button" id="arm-capture-maximum" aria-label="Record left limit">Record</button><button type="button" id="arm-move-maximum" class="quiet" hidden disabled aria-label="Go to saved left limit">Go</button></td></tr>
+                  <tr><th scope="row">Centre</th><td><output id="arm-recorded-center">—</output></td><td><output id="arm-saved-center">—</output></td><td class="cell-actions"><button type="button" id="arm-capture-center" aria-label="Record centre">Record</button><button type="button" id="arm-move-center" class="quiet" hidden disabled aria-label="Go to saved centre">Go</button></td></tr>
+                  <tr><th scope="row">Right</th><td><output id="arm-recorded-minimum">—</output></td><td><output id="arm-saved-minimum">—</output></td><td class="cell-actions"><button type="button" id="arm-capture-minimum" aria-label="Record right limit">Record</button><button type="button" id="arm-move-minimum" class="quiet" hidden disabled aria-label="Go to saved right limit">Go</button></td></tr>
                 </tbody>
               </table>
             </div>
             <div class="card-actions"><button type="button" id="arm-apply-limits" class="primary" aria-describedby="arm-limits-validation">Save limits</button></div>
             <p id="arm-limits-validation" class="status-msg" role="status"></p>
+          </section>
+          <section class="set-card">
+            <header class="card-head"><h4>Detector sweep range <span class="tip" data-tip="Degrees relative to the saved arm centre (0°). Search sweeping and Confirm arc use these endpoints. Until saved, the full calibrated arm range is used. Physical arm limits and probe scans stay separate. Record current copies the released arm position into a field; save to apply it."></span></h4></header>
+            <div class="fields-2">
+              <div class="inline-fields">
+                <label class="field"><span class="field-name">Right limit <span class="unit">°</span></span><input id="arm-sweep-minimum" type="number" min="-360" max="360" step="any" required readonly></label>
+                <button id="arm-sweep-record-minimum" type="button" disabled aria-label="Record current arm position as detector right limit">Record current</button>
+              </div>
+              <div class="inline-fields">
+                <label class="field"><span class="field-name">Left limit <span class="unit">°</span></span><input id="arm-sweep-maximum" type="number" min="-360" max="360" step="any" required readonly></label>
+                <button id="arm-sweep-record-maximum" type="button" disabled aria-label="Record current arm position as detector left limit">Record current</button>
+              </div>
+            </div>
+            <div class="card-actions"><button id="arm-sweep-save" type="button" class="primary" disabled>Save on car</button></div>
+            <p id="arm-sweep-status" class="status-msg" role="status">Connect and save the arm limits to edit the sweep range.</p>
           </section>
           <section class="set-card">
             <header class="card-head"><h4>Probe alignment</h4></header>

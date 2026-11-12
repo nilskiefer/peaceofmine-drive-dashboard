@@ -187,7 +187,7 @@ function createServoSettings(role) {
       : !owner ? 'Take control to configure the servo.'
       : live.torque ? 'Stop the active servo before changing the servo ID.'
       : !servo.serial_connected ? 'Waiting for the servo serial adapter.' : '';
-    $('arm-calibration-access').textContent = owner && active && state.drive.calibrating ? role === 'probe' ? 'Home, hold Down, release, then save the current depth.' : 'Jog, release, then record the limits.' : selectionBlocked || 'Select a servo to configure it.';
+    $('arm-calibration-access').textContent = owner && active && state.drive.calibrating ? role === 'probe' ? 'Home, hold Down, release, then save the current depth.' : 'Move with the position slider, release the motor, then record the limits.' : selectionBlocked || 'Select a servo to configure it.';
     $('arm-take-control').hidden = owner;
     $('arm-take-control').disabled = !state.connected;
     $('arm-select-id').disabled = Boolean(selectionBlocked) || servoSelect.value === '';
@@ -247,8 +247,8 @@ function createServoSettings(role) {
         const saved = servo.calibration?.[point];
         $(`arm-capture-${point}`).disabled = !canRecord;
         const move = $(`arm-move-${point}`);
-        move.disabled = !ready || !Number.isFinite(saved);
-        move.title = Number.isFinite(saved) ? `Hold to move to saved ${armAngle(saved)}.` : 'Save this limit first.';
+        move.disabled = true;
+        move.hidden = true;
         $(`arm-recorded-${point}`).textContent = armAngle(captured[point]);
         $(`arm-saved-${point}`).textContent = armAngle(saved);
       }
@@ -364,7 +364,6 @@ function createServoSettings(role) {
         armCommand('capture', {point:reversedArmCaptures(servo.captured) ? legacySlot : point});
         updateArmSettings();
       };
-      bindHold($(`arm-move-${point}`), 'move', {point});
     }
     if (role === 'arm') $('arm-apply-limits').onclick = () => {
       const servo = state.actuators?.[role] || state.arm_servo || {};

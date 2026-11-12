@@ -20,7 +20,7 @@ from std_msgs.msg import Bool, Float32, String
 from peaceofmine_operator import marking_settings
 from peaceofmine_operator.rc_safety import RcSafety
 from peaceofmine_operator.transport_clock import transport_age
-from peaceofmine_operator import driving_settings, inspection, probe_alignment, probe_scan, probe_guidance
+from peaceofmine_operator import driving_settings, inspection, probe_alignment, probe_scan, probe_guidance, arm_sweep
 from peaceofmine_operator.detector import DetectorTelemetry
 from peaceofmine_operator.inspection import InspectionWorkflow
 from peaceofmine_interfaces.action import ActuatorOperation
@@ -70,6 +70,7 @@ class OperatorControl(Node):
         self._field_clear = self.create_publisher(Bool, 'field/clear', 10)
         self._confirmation_passes = inspection.DEFAULTS['passes']
         self._probe_pattern = probe_scan.DEFAULTS
+        self._arm_sweep_settings = dict(arm_sweep.DEFAULTS)
         self._alert_options = {'enabled': True, 'level': 60}
         self._search_alert = {'phase':'idle'}
         self.create_subscription(String, 'operator/settings', self._mission_settings_cb, 10)
@@ -178,6 +179,7 @@ class OperatorControl(Node):
     def _mission_settings_cb(self, msg):
         try:
             settings = json.loads(msg.data)
+            self._arm_sweep_settings = arm_sweep.validate(settings.get('arm_sweep',arm_sweep.DEFAULTS))
             self._guidance_geometry = probe_guidance.validate(settings.get('probe_guidance'))
             self._confirmation_passes = inspection.validate(settings.get('inspection', inspection.DEFAULTS))['passes']
             alignment = settings.get('probe_alignment', probe_alignment.DEFAULTS)
@@ -338,6 +340,9 @@ class OperatorControl(Node):
         if action == 'confirm':
             if time.monotonic()-self._inspection_detector_at >= .5 or not self._inspection_detector.get('fresh'):
                 raise ValueError('Fresh detector readings are required for confirmation')
+            sweep_low,sweep_high = arm_sweep.resolve_ticks(self._arm_sweep_settings,calibration)
+            lower = (sweep_low-calibration['center'])*360/4096+offset
+            upper = (sweep_high-calibration['center'])*360/4096+offset
             self._stop_motion_locked(for_inspection=True)
             self._inspection.confirm(lower, upper, self._inspection_detector.get('sweep_speed_deg_s'),
                                      self._confirmation_passes, home_probe=bool(self._probe_state.get('connected')))

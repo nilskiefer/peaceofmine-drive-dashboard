@@ -9,14 +9,14 @@ from peaceofmine_operator.servo_motor import recorded_arm_limits
 from peaceofmine_operator.probe_calibration import validate as validate_probe, validate_direction
 from rclpy.node import Node
 from std_msgs.msg import String
-from peaceofmine_operator import configuration, camera_settings
+from peaceofmine_operator import configuration, camera_settings, arm_sweep
 from peaceofmine_operator.node_runner import run_node
 from peaceofmine_operator.detector import calibration_values
 
 
 from peaceofmine_operator import display_settings, driving_settings, field_gnss, inspection, marking_settings, probe_alignment, probe_scan, probe_stroke, probe_guidance, probe_contact_settings
 
-SHARED = dict(cameras=camera_settings, display=display_settings, driving=driving_settings,
+SHARED = dict(arm_sweep=arm_sweep,cameras=camera_settings, display=display_settings, driving=driving_settings,
               gnss=field_gnss, inspection=inspection, marking=marking_settings, probe_alignment=probe_alignment,
               probe_scan=probe_scan, probe_stroke=probe_stroke, probe_guidance=probe_guidance, probe_contact=probe_contact_settings)
 
@@ -25,6 +25,7 @@ class OperatorSettings(Node):
     def __init__(self, **kwargs):
         super().__init__('operator_settings', **kwargs)
         self.path = self.declare_parameter('config_file', configuration.default_path()).value
+        self.simulation = self.declare_parameter('simulation', False).value
         self.state_pub = self.create_publisher(String, 'operator/settings', 10)
         self.result_pub = self.create_publisher(String, 'operator/settings/result', 10)
         self.create_subscription(String, 'operator/settings/command', self.command, 10)
@@ -47,6 +48,8 @@ class OperatorSettings(Node):
             section=storage_section.removesuffix('_simulation') if simulation else storage_section
             if section in SHARED:
                 value = SHARED[section].validate(value)
+                if section == 'arm_sweep':
+                    arm_sweep.resolve_ticks(value,configuration.actuator_settings(self.path,self.simulation).get('arm'))
             elif section in ('adc', 'adc_simulation'):
                 config, routes, trigger = OperatorADC.validate(value)
                 value = dict(config=config, routes=routes, probe_trigger=trigger)
@@ -106,6 +109,8 @@ class OperatorSettings(Node):
             if not isinstance(section, str) or section not in SHARED:
                 raise ValueError('Unknown shared settings section')
             value = SHARED[section].validate(command.get('value'))
+            if section == 'arm_sweep':
+                arm_sweep.resolve_ticks(value,configuration.actuator_settings(self.path,self.simulation).get('arm'))
             if section == 'probe_contact':
                 saved = configuration.load(self.path)
                 value['zero_counts'] = saved.get(section,{}).get('zero_counts')

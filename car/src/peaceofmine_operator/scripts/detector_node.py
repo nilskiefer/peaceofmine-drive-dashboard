@@ -19,7 +19,7 @@ from rclpy.qos import qos_profile_sensor_data
 from peaceofmine_operator.ads1115 import RANGES
 from peaceofmine_operator.detector import DetectorTelemetry, calibration_values, fixture_angle_at
 from peaceofmine_interfaces.msg import ActuatorStatus, AdcSamples
-from peaceofmine_operator import configuration
+from peaceofmine_operator import configuration, arm_sweep
 from peaceofmine_operator.actuator_protocol import status_dict
 from peaceofmine_operator.settings_client import SettingsClient
 from peaceofmine_operator.node_runner import run_node
@@ -34,6 +34,7 @@ class DetectorNode(Node):
         self.use_adc = bool(self.declare_parameter('use_adc', True).value)
         self.adc_channel = 6
         self.adc_revision = 0
+        self.sweep_range = dict(arm_sweep.DEFAULTS)
         self.adc_session = None
         self.adc_sequence = -1
         self.configuration_error = None
@@ -114,6 +115,7 @@ class DetectorNode(Node):
     def load_calibration(self):
         previous = (self.baseline, self.full_response, self.reference_voltage, self.adc_channel, self.adc_revision)
         saved = configuration.load(self.config_file)
+        self.sweep_range = arm_sweep.validate(saved.get('arm_sweep',arm_sweep.DEFAULTS))
         value = saved.get('metal_detector', dict(baseline_adc=0., full_response_adc=255., reference_voltage=5.))
         base, full, ref = calibration_values(value)
         self.baseline, self.full_response, self.reference_voltage = float(base), float(full), float(ref)
@@ -322,6 +324,7 @@ class DetectorNode(Node):
             if calibration:
                 low, center, high = (calibration.get(k) for k in ('minimum', 'center', 'maximum'))
                 if all(type(v) is int for v in (low, center, high)) and 0 <= low < center < high <= 4095:
+                    low, high = arm_sweep.resolve_ticks(self.sweep_range,calibration)
                     lower, upper = (low-center)*360/4096, (high-center)*360/4096
                     if (lower, upper) != (self.lower, self.upper):
                         self.lower, self.upper = lower, upper

@@ -7,6 +7,7 @@ from sensor_msgs.msg import JointState
 from peaceofmine_interfaces.msg import ServoCommand
 from peaceofmine_operator.actuator_controller import ActuatorController
 from peaceofmine_operator.node_runner import run_node
+from peaceofmine_operator import arm_sweep
 
 
 class ArmController(ActuatorController):
@@ -60,7 +61,8 @@ class ArmController(ActuatorController):
                 calibration = self.calibration()
                 if not calibration:
                     raise ValueError('Calibrate arm before sweeping')
-                self.start(calibration['maximum'], calibration['minimum'], calibration['maximum'],
+                low, high = arm_sweep.resolve_ticks(self.saved.get('arm_sweep',arm_sweep.DEFAULTS),calibration)
+                self.start(high, low, high,
                     speed=max(1, round(self.sweep_speed/.684)), mode=ServoCommand.SWEEP,
                     tolerance=max(1, math.ceil(self.tolerance_deg*4096/360)))
                 self.sweeping = True

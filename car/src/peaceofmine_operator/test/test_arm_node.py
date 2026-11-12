@@ -108,6 +108,31 @@ class ActuatorTest(unittest.TestCase):
         finally:
             self.probe.simulation = True
 
+    def test_detector_sweep_has_its_own_endpoints_and_position_keeps_full_arm_range(self):
+        from peaceofmine_operator import arm_sweep
+        physical=dict(self.arm.calibration())
+        limits=dict(minimum_deg=-20.,maximum_deg=35.)
+        configuration.save_section(self.path,'arm_sweep',limits)
+        self.driver.reload()
+        self.arm.reload_settings()
+        self.spin(.12)
+        self.assertTrue(self.command(self.arm,action='sweep',enabled=True)['success'])
+        self.spin(.12)
+        low,high=arm_sweep.resolve_ticks(limits,physical)
+        operation=self.arm.operation
+        self.assertEqual((operation.minimum,operation.maximum),(low,high))
+        self.assertEqual(self.driver.runtime.bus.sweep,(self.arm.ident,low,high))
+        self.assertEqual(self.arm.calibration(),physical)
+        self.command(self.arm,action='stop')
+        self.spin(.12)
+        result=self.command(self.arm,action='angle',angle_deg=-40.)
+        self.assertTrue(result['success'],result)
+        self.assertLess(self.arm.operation.target,low)
+        self.assertEqual((self.arm.operation.minimum,self.arm.operation.maximum),(physical['minimum'],physical['maximum']))
+        configuration.save_section(self.path,'arm_sweep',dict(minimum_deg=-10.,maximum_deg=10.))
+        self.arm.reload_settings()
+        self.assertIsNone(self.arm.operation,'Range changes must stop an existing move')
+
     def test_probe_linear_speeds_reach_simulated_motor_register(self):
         configuration.save_section(self.path,'probe_stroke',dict(down_mm_s=20.,retract_mm_s=30.,retract_slow_mm_s=5.,home_load_percent=10.))
         self.driver.reload()

@@ -64,7 +64,7 @@ class ServoDriver(Node):
             if proposed != self.config:
                 if self.runtime and proposed.get('arm_pid') != self.config.get('arm_pid'):
                     self.disconnect('PID configuration changed; reconnecting stopped')
-                changed = any(proposed.get(k) != self.config.get(k) for k in ('arm','probe','arm_motion','probe_motion','probe_stroke'))
+                changed = any(proposed.get(k) != self.config.get(k) for k in ('arm','probe','arm_motion','probe_motion','probe_stroke','arm_sweep'))
                 if self.runtime and changed:
                     self.runtime.stop('aborted', 'Configuration changed; start again')
                 self.config = proposed

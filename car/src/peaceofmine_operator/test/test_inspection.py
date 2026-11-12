@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import Mock
 
 from peaceofmine_operator.inspection import InspectionWorkflow
+from peaceofmine_operator import arm_sweep
 
 
 class InspectionTest(unittest.TestCase):
@@ -129,9 +130,9 @@ class InspectionTest(unittest.TestCase):
         source=ast.parse(path.read_text())
         kind=next(node for node in source.body if isinstance(node,ast.ClassDef))
         method=next(node for node in kind.body if isinstance(node,ast.FunctionDef) and node.name=='_start_inspection')
-        scope=dict(math=math,time=SimpleNamespace(monotonic=lambda:100.),STOP_TAIL_S=.5)
+        scope=dict(math=math,time=SimpleNamespace(monotonic=lambda:100.),STOP_TAIL_S=.5,arm_sweep=arm_sweep)
         exec(compile(ast.Module(body=[method],type_ignores=[]),str(path),'exec'),scope)
-        owner=SimpleNamespace(_inspection=self.flow,_confirmation_passes=4,_calibrating=False,_probe_state={},
+        owner=SimpleNamespace(_inspection=self.flow,_arm_sweep_settings=dict(minimum_deg=-22.5,maximum_deg=45.),_confirmation_passes=4,_calibrating=False,_probe_state={},
             _pump_active=False,_arm_state=dict(connected=True,calibration=dict(minimum=1024,center=2048,maximum=3072)),
             _arm_state_at=100.,get_parameter=lambda name:SimpleNamespace(value=0.),
             _inspection_clients={'arm':SimpleNamespace(server_is_ready=lambda:True)},
@@ -139,9 +140,19 @@ class InspectionTest(unittest.TestCase):
             _stop_motion_locked=Mock(),_publish_twist=Mock())
         scope['_start_inspection'](owner,dict(action='confirm',speed_deg_s=99.))
         self.tick()
-        self.assertEqual(self.execute.call_args.args[:4],('arm','angle',-90.,36.))
+        self.assertEqual(self.execute.call_args.args[:4],('arm','angle',-22.5,36.))
+        self.assertEqual((self.flow.lower,self.flow.upper),(-22.5,45.))
         self.assertEqual(self.flow.confirm_speed,36.)
         self.assertEqual(self.flow.total,4)
+        self.flow.stop()
+        owner._probe_state=dict(connected=True,probe=dict(ready=True,max_depth_mm=80.))
+        owner._probe_state_at=100.
+        owner._probe_fault=False
+        owner._probe_pattern=dict(point_count=5,spacing_deg=30.)
+        owner._inspection_clients['probe']=SimpleNamespace(server_is_ready=lambda:True)
+        scope['_start_inspection'](owner,dict(action='manual_probe_scan'))
+        self.assertEqual([angle for kind,angle in self.flow.queue if kind=='position'],[-90.,-60.,-30.,0.,30.,60.,90.])
+
 
     def test_stale_old_peak_cannot_confirm_a_pass(self):
         self.flow.confirm(-90.,90.,36.)
