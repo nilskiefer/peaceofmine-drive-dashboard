@@ -1,7 +1,7 @@
 {
   "arm": {
     "servo_id": 1,
-    "minimum": 618,
+    "minimum": 459,
     "center": 1562,
     "maximum": 2222
   },
@@ -16,9 +16,9 @@
     "reference_voltage": 5.0
   },
   "schema_version": 1,
-  "revision": 103,
+  "revision": 104,
   "section_revisions": {
-    "arm": 77,
+    "arm": 104,
     "adc": 33,
     "driving": 35,
     "cameras": 30,
