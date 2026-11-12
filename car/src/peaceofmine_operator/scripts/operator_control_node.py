@@ -345,7 +345,7 @@ class OperatorControl(Node):
             if self._inspection.confirmed_angle is None:
                 raise ValueError('Confirm a detection before starting the probe scan')
             probe = self._probe_state.get('probe', {})
-            depth = payload.get('depth_mm')
+            depth = probe.get('max_depth_mm')
             if (type(depth) not in (int,float) or not math.isfinite(depth)
                     or not 0 < depth <= probe.get('max_depth_mm', 0)):
                 raise ValueError('Choose a positive probe depth within its calibrated travel')
@@ -1194,8 +1194,8 @@ class OperatorControl(Node):
                 command = {key: payload[key] for key in ('action', 'request_id', 'role', 'point', 'held', 'direction', 'position', 'speed_deg_s', 'hold_id', 'load_percent') if key in payload}
                 return self._actuator_command(command)
             elif message_type in ('probe_target', 'start_probe_cycle', 'probe_cycle'):
-                requested = float(payload.get('depth_mm', 80.0 if message_type != 'probe_target' else 0.0))
-                if not math.isfinite(requested):
+                requested = float(payload.get('depth_mm',0.0)) if message_type == 'probe_target' else None
+                if requested is not None and not math.isfinite(requested):
                     return {'type': 'error', 'message': 'Probe extension must be finite'}
                 if self._pump_active:
                     error = {'type': 'error', 'message': 'Wait for ground marking to finish.'}
@@ -1207,6 +1207,10 @@ class OperatorControl(Node):
                         return {'type': 'error', 'message': probe.get('reason', 'Home and calibrate probe first')}
                     if self._arm_state.get('sweeping'):
                         return {'type': 'error', 'message': 'Stop arm sweep before moving the probe'}
+                    if message_type in ('start_probe_cycle','probe_cycle'):
+                        requested = probe.get('max_depth_mm')
+                        if type(requested) not in (int,float) or not math.isfinite(requested):
+                            return {'type':'error','message':'Save the maximum depth in Setup → Probe first'}
                     if not 0 <= requested <= probe['max_depth_mm']:
                         return {'type': 'error', 'message': 'Target exceeds saved maximum extension'}
                     if message_type in ('start_probe_cycle', 'probe_cycle'):

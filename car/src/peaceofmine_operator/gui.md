@@ -215,6 +215,9 @@ those linear speeds instead of silently imposing the old 73-unit shaft cap.
 Unsupported speeds are rejected with the available mm/s limit. The main
 Contact and depth graph shows the selected contact signal (ESP32 counts or
 ADC volts), its saved threshold and encoder depth, with current readings.
+Probe cycles and scans always use the maximum depth saved in Setup; the
+workbench displays that value without a second editable depth. The manual
+depth slider still permits shallower moves within the saved maximum.
 
 Shared robot settings and hardware calibration live in **`src/peaceofmine_operator/operator_config.json`**:
 `arm` contains the servo ID and minimum/centre/maximum encoder positions;

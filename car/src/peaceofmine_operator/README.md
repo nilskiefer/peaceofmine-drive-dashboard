@@ -55,7 +55,9 @@ ros2 launch peaceofmine_operator operator.launch.xml is_sim:=false \
   front_camera_device:=/dev/v4l/by-id/usb-Sonix_Technology_Co.__Ltd._H264_USB_Camera_SN0001-video-index0
 ```
 
-The resolver passes that stable link to `usb_cam`. Automatic discovery sorts
+The resolver selects that stable link, then resolves its current device node
+before starting `usb_cam`, whose V4L2 discovery mishandles relative symlink
+targets. Identity selection is repeated after a camera restart. Automatic discovery sorts
 the persistent links; cameras without a by-id link use by-path when available.
 With multiple cameras, save explicit by-id paths in the capture settings to
 bind each camera to its role even when another camera is added or removed.

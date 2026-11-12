@@ -121,16 +121,15 @@
 
         <div class="dock-pane pane-split pane-probe" data-dock-pane="probe" role="tabpanel" hidden>
           <section class="pane-section probe-diagnostics-panel" aria-labelledby="manual-probe-heading">
-            <div class="section-head"><h2 id="manual-probe-heading">Manual probe</h2></div>
-            <div class="probe-graphic" aria-hidden="true"><span id="probe-arm"></span><i></i></div>
-            <label class="field-label" for="probe-slider">Push to depth</label>
-            <input id="probe-slider" type="range">
-            <div class="button-row">
+            <div class="section-head"><h2 id="manual-probe-heading">Manual probe</h2><div class="probe-graphic" aria-hidden="true"><span id="probe-arm"></span><i></i></div></div>
+            <div class="manual-probe-controls">
+              <label class="field-label" for="probe-slider">Push to depth</label>
+              <input id="probe-slider" type="range">
               <button id="start-probing" type="button">Probe once</button>
             </div>
             <div class="section-head probe-trace-heading"><h3>Contact and depth</h3><span class="head-note">Last 30 s</span></div>
             <div class="chart-box manual-probe-chart"><canvas id="manual-probe-history" role="img" aria-label="Filtered contact sensor readings and saved threshold, with measured encoder depth in millimetres over the last 30 seconds"></canvas></div>
-            <dl class="readouts inline" aria-label="Current probe readings">
+            <dl class="readouts inline manual-probe-readouts" aria-label="Current probe readings">
               <div><dt>Contact</dt><dd id="manual-probe-contact-value">—</dd></div>
               <div><dt>Depth</dt><dd id="manual-probe-depth-value">—</dd></div>
             </dl>
@@ -286,8 +285,8 @@
           </div>
           <div class="probe-cycle-card">
             <div class="field-row probe-cycle-input-row">
-              <label for="probe-cycle-target">Deepest probe</label>
-              <div class="probe-cycle-input-wrap"><input id="probe-cycle-target" type="number" min="0.1" step="any" value="80" required><span class="unit">mm</span></div>
+              <label for="probe-cycle-target">Maximum depth <span class="tip" data-tip="Saved in Setup → Probe. Probe cycles and scans always use this maximum; the manual slider can request a shallower depth."></span></label>
+              <div class="probe-cycle-input-wrap"><output id="probe-cycle-target">—</output><span class="unit">mm</span></div>
             </div>
             <div class="field-row"><span id="probe-adc-contact" class="note" role="status">Waiting for a contact reading.</span><button type="button" class="quiet" data-open-settings="contact">Contact setup</button></div>
             <div id="probe-cycle-alert" class="probe-cycle-alert hidden" role="alert">
@@ -594,13 +593,11 @@
               <label class="field"><span class="field-name">Down speed <span class="unit">mm/s</span></span><input id="probe-down-speed" type="number" min="0" step="any" data-positive required readonly></label>
               <label class="field"><span class="field-name">Retract speed <span class="unit">mm/s</span></span><input id="probe-retract-speed" type="number" min="0" step="any" data-positive required readonly></label>
             </div>
-            <label class="field"><span class="field-name">Automatic home load <span class="unit">%</span> <span class="tip" data-tip="During automatic homing, the probe retracts to the top and sets zero at this motor load."></span></span><input id="probe-servo-home-load" type="number" min="10" max="60" step="any" required readonly></label>
             <div class="card-actions"><button id="probe-stroke-save" type="button" class="primary" disabled>Save on car</button></div>
             <p id="probe-stroke-status" class="status-msg" role="status">Waiting for car settings.</p>
           </section>
           <section class="set-card">
-            <header class="card-head"><h4><span class="step">2</span>Home <span class="tip" data-tip="Hold Home while the probe retracts to the top. Release at the top to set zero; automatic load detection also stops and sets zero. Stop releases the motor without setting zero."></span></h4></header>
-            <div class="card-actions"><button type="button" id="probe-servo-home">↑ Hold Home</button><p id="probe-servo-home-status" class="meta" role="status">Waiting for probe encoder</p></div>
+            <header class="card-head probe-home-row"><h4><span class="step">2</span>Home <span class="tip" data-tip="Hold Home while the probe retracts to the top. Release at the top to set zero; automatic load detection also stops and sets zero. Stop releases the motor without setting zero."></span></h4><button type="button" id="probe-servo-home">↑ Hold Home</button><p id="probe-servo-home-status" class="meta" role="status">Waiting for probe encoder</p></header>
             <header class="card-head"><h4><span class="step">3</span>Save maximum depth <span class="tip" data-tip="After homing, hold Down to the deepest safe point, release, then save the current measured encoder depth. Depth uses the car’s saved travel conversion; no manual measurement is needed."></span></h4></header>
             <div class="hold-row">
               <button type="button" id="probe-servo-jog-left">↓ Hold down</button>
@@ -611,11 +608,12 @@
               <label class="field"><span class="field-name">Jog speed <span class="unit">°/s</span></span><input id="probe-servo-jog-speed" type="number" step="any" value="50" required></label>
               <label class="field"><span class="field-name">Depth from top <span class="unit">mm</span></span><input id="probe-servo-max-extension" type="number" min="0.1" max="10000" step="any" required></label>
             </div>
-            <div class="card-actions"><button id="probe-servo-save-extension" type="button" class="primary">Save current position as max depth</button><p id="probe-servo-extension-status" class="meta" role="status">Deepest point not saved</p></div>
+            <div class="card-actions"><button id="probe-servo-save-extension" type="button" class="primary">Save maximum depth</button><p id="probe-servo-extension-status" class="meta" role="status">Deepest point not saved</p></div>
           </section>
         </div>
-        <details class="set-more"><summary>Direction and travel mode</summary>
+        <details class="set-more"><summary>Homing, direction and travel mode</summary>
           <div class="set-more-body">
+            <label class="field"><span class="field-name">Automatic home load <span class="unit">%</span> <span class="tip" data-tip="During automatic homing, the probe retracts to the top and sets zero at this motor load."></span></span><input id="probe-servo-home-load" type="number" min="10" max="60" step="any" required readonly></label>
             <label class="check"><input id="probe-servo-reverse" type="checkbox" disabled> Reverse probe direction <span class="tip" data-tip="Saved on the car. Changing it clears home."></span></label>
             <div class="inline-fields">
               <p id="probe-servo-position-mode" class="status-msg grow" role="status">Select the probe motor to read its travel mode</p>

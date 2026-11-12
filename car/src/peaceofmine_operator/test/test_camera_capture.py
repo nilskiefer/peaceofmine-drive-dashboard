@@ -33,13 +33,13 @@ class CameraCaptureTest(unittest.TestCase):
                 links[0].unlink();links[0].symlink_to(directory/'video1')
                 self.assertEqual(module.matching_capture_devices(object()),[str(link) for link in links])
 
-    def test_explicit_camera_link_is_passed_to_driver(self):
+    def test_persistent_link_is_resolved_for_driver_that_misreads_relative_symlinks(self):
         module=self.module()
         with tempfile.TemporaryDirectory() as tmp:
             device=Path(tmp)/'video4';device.touch()
             link=Path(tmp)/'camera-by-id';link.symlink_to(device)
             with patch.dict(os.environ,{'POM_CAMERA_DEVICE':str(link)}):
-                self.assertEqual(module.resolve_device(),str(link))
+                self.assertEqual(module.resolve_device(),str(device))
 
     def test_camera_without_serial_uses_physical_path(self):
         module=self.module()

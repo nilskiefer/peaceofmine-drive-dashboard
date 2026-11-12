@@ -509,7 +509,8 @@ class OperatorControlProbeTest(unittest.TestCase):
         res = self.ctrl.handle_command('client1', {'type': 'start_probe_cycle', 'depth_mm': 80.0, 'request_id': 'req1'})
         self.assertIsNone(res)
         self.ctrl._probe_command_pub.publish.assert_called_once()
-        self.assertEqual(self.ctrl._probe_command_pub.publish.call_args.args[0].depth_mm, 80.0)
+        self.assertEqual(self.ctrl._probe_command_pub.publish.call_args.args[0].depth_mm,
+                         self.ctrl._probe_state['probe']['max_depth_mm'])
 
     def test_probe_cycle_dispatch_does_not_depend_on_odometry(self):
         self.ctrl._stationary=lambda:False

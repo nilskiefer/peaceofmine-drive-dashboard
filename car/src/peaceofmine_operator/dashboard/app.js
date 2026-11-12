@@ -84,7 +84,7 @@ const state = {
   probe: {
     depth_mm: 0,
     target_mm: 0,
-    max_depth_mm: 110,
+    max_depth_mm: null,
     pressure_ratio: 0,
     pressure_history: [],
     fault: false,
@@ -823,11 +823,18 @@ function operationBlock(allowManualTarget = false) {
   return '';
 }
 
+function savedProbeMaximum() {
+  const measured = state.probe?.max_depth_mm;
+  if (Number.isFinite(measured) && measured > 0) return measured;
+  const saved = state.settings?.probe?.max_extension_mm;
+  return Number.isFinite(saved) && saved > 0 ? saved : null;
+}
+
 function probeActionBlock(allowManualTarget = false) {
   const blocked = operationBlock(allowManualTarget);
   if (blocked) return blocked;
   if (state.actuators?.probe?.connected === false) return 'Waiting for probe encoder telemetry.';
-  if (!Number.isFinite(state.probe.max_depth_mm) || state.probe.max_depth_mm <= 0) return 'Save the measured travel in Setup → Probe.';
+  if (savedProbeMaximum() === null) return 'Save the maximum depth in Setup → Probe.';
   if (!state.probe.ready || !Number.isFinite(state.probe.depth_mm)) return 'Waiting for probe encoder telemetry.';
   if (state.probe.fault) return 'Clear the probe fault in Setup → Probe.';
   return '';
@@ -855,10 +862,9 @@ function startProbeCycle() {
   if (state.detector.sweep_enabled) { showNotice('Stop sweeping before probing.'); return; }
   const contact = state.probe.adc_contact_state;
   if (!contact?.enabled || !contact.fresh) { showNotice('Save a contact limit and wait for a fresh reading.'); return; }
-  const input = $('probe-cycle-target');
-  if (!input.reportValidity()) return;
-  send({type: 'start_probe_cycle', depth_mm: input.valueAsNumber});
-  showNotice(`Probe cycle requested to ${input.valueAsNumber} mm.`);
+  const depth = savedProbeMaximum();
+  send({type: 'start_probe_cycle', depth_mm: depth});
+  showNotice(`Probe cycle requested to ${depth} mm.`);
 }
 
 function checkProbeCycleState() {
@@ -1020,9 +1026,7 @@ function startInspection(action) {
   if (blocked) { showNotice(blocked); return; }
   const command = {type: 'inspection', action};
   if (action === 'probe_scan') {
-    const depth = $('probe-cycle-target');
-    if (!depth.reportValidity()) return;
-    command.depth_mm = depth.valueAsNumber;
+    command.depth_mm = savedProbeMaximum();
   }
   stopInput();
   send(command);
@@ -1195,8 +1199,13 @@ function renderInspection() {
   }
   const taskKey = `${phase}:${Boolean(probe.cycle_active)}`;
   if (taskKey !== inspectionTaskKey) {
-    if (probe.cycle_active || ['CONFIRMED', 'PROBING', 'COMPLETE'].includes(phase)) $('probe-task').open = true;
-    else if (['IDLE', 'CONFIRMING'].includes(phase)) $('search-task').open = true;
+    if (probe.cycle_active || ['CONFIRMED', 'PROBING', 'COMPLETE'].includes(phase)) {
+      $('search-task').open = false;
+      $('probe-task').open = true;
+    } else if (['IDLE', 'CONFIRMING'].includes(phase)) {
+      $('probe-task').open = false;
+      $('search-task').open = true;
+    }
     inspectionTaskKey = taskKey;
   }
   const progress = $('inspection-progress');
@@ -1346,11 +1355,10 @@ function updateHud() {
     $('operation-help').hidden = false;
   }
   $('inspection-panel').hidden = !inspectionStatus;
-  const depthInput = $('probe-cycle-target');
-  depthInput.max = Number.isFinite(probe.max_depth_mm) && probe.max_depth_mm > 0 ? probe.max_depth_mm : 0;
-  depthInput.disabled = !Number.isFinite(probe.max_depth_mm) || probe.max_depth_mm <= 0 || Boolean(probe.cycle_active);
+  const maximum = savedProbeMaximum();
+  $('probe-cycle-target').value = maximum === null ? '—' : maximum.toString();
   $('mode-sweep-btn').disabled = Boolean(sweepBlock);
-  $('mode-sweep-btn').title = sweepBlock;
+  $('mode-sweep-btn').title = sweepBlock || 'Swing the detector coil while you drive';
   $('sweep-speed').disabled = Boolean(sweepBlock);
   $('mode-sweep-pill').textContent = detector.sweep_enabled ? 'SWEEPING' : sweepBlock ? 'BLOCKED' : 'READY';
   $('mode-sweep-btn').querySelector('.mode-text').textContent = detector.sweep_enabled ? 'Stop search sweep' : 'Search sweep';
@@ -1421,7 +1429,7 @@ function updateHud() {
   $('probe-position-error').textContent = Number.isFinite(probe.position_error_ticks) ? `${(probe.position_error_ticks * 360 / 4096).toFixed(2)}°` : '—';
   $('probe-zero-contact').disabled = !owner || !servoSafe || !probe.contact_can_zero;
   $('probe-zero-status').textContent = probe.contact_zeroed ? 'Zeroed · the chart shows change from zero' : 'Lift the probe clear to zero the motor load';
-  setRange($('probe-slider'), 0, probe.max_depth_mm || 1, .1);
+  setRange($('probe-slider'), 0, maximum || 1, .1);
   if (!activeSliders.has('probe-slider')) $('probe-slider').value = probe.target_mm;
   if (!state.connected) drawProbeMotion(probe.depth_mm);
   $('probe-status').textContent = probe.fault ? 'FAULT' : probe.ready !== true ? (state.actuators?.probe?.connected === false ? 'OFFLINE' : probe.max_depth_mm > 0 ? 'WAITING' : 'TRAVEL NEEDED') : probe.cycle_active ? (probe.cycle_phase === 'DESCENDING' ? 'PROBING' : 'RETRACTING') : probe.holding ? 'HOLDING' : probe.depth_mm > 2 ? 'DEPLOYED' : 'STOWED';

@@ -19,7 +19,7 @@ def matching_capture_devices(context: pyudev.Context) -> list[str]:
     for directory in ('by-id', 'by-path'):
         paths = sorted(glob(f'/dev/v4l/{directory}/*video-index0'))
         if paths:
-            # Keep the persistent names when passing devices to usb_cam.
+            # Sort by persistent identity so USB enumeration cannot swap roles.
             devices = {}
             for path in paths:
                 devices.setdefault(str(Path(path).resolve()), path)
@@ -44,7 +44,7 @@ def resolve_device(timeout_s: float = 8.0) -> str:
         resolved = str(Path(explicit).resolve())
         if not Path(resolved).exists():
             raise RuntimeError(f'Configured camera device does not exist: {explicit}')
-        return explicit
+        return resolved
 
     camera_index = int(os.environ.get('POM_CAMERA_INDEX', '0'))
     context = pyudev.Context()
@@ -52,7 +52,9 @@ def resolve_device(timeout_s: float = 8.0) -> str:
     while True:
         matches = matching_capture_devices(context)
         if len(matches) > camera_index:
-            return matches[camera_index]
+            # usb_cam incorrectly interprets relative by-id symlink targets
+            # relative to /dev. Select by identity, then open its real node.
+            return str(Path(matches[camera_index]).resolve())
         if time.monotonic() >= deadline:
             raise RuntimeError(f'No V4L2 capture device found for camera index {camera_index}')
         time.sleep(0.25)

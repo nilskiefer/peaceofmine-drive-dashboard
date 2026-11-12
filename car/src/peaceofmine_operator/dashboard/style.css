@@ -233,6 +233,15 @@ dialog a { color: var(--accent); }
 .set-more[open] > summary::before { transform: rotate(90deg); }
 .set-more-body { display: grid; gap: var(--s3); padding: var(--s3); color: var(--muted); font-size: var(--fs-sm); }
 
+/* Probe calibration keeps the held controls beside their status. */
+#settings-probe .probe-home-row { flex-wrap: wrap; justify-content: start; }
+#settings-probe .probe-home-row > .meta { flex: 1 1 8rem; }
+#settings-probe .card-actions { margin-top: 0; }
+#settings-probe .status-bar { gap: var(--s2) var(--s3); }
+#settings-probe .status-bar > .status-msg { flex-basis: 12rem; }
+#settings-probe .readouts.inline { flex-wrap: wrap; gap: var(--s2) var(--s3); }
+#settings-probe .card-inline > h4 { min-width: 0; }
+
 /* ----------------------------------------------------------- Fields --- */
 .field { display: grid; gap: var(--s1); margin: 0; }
 .field-name { display: inline-flex; align-items: center; gap: var(--s1); color: var(--muted); font-size: var(--fs-xs); font-weight: 600; }
@@ -489,8 +498,10 @@ main { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: var(--gap); 
 .pane-detector > .pane-actions { grid-area: actions; margin: var(--s2) 0 0; padding: var(--s2) 0 0; border-left: 0; border-top: 1px solid var(--line); }
 @media (min-width: 1001px) and (min-height: 601px) {
   .workspace:where(:not(.detector-expanded)):has([data-dock-tab="detector"].active) { grid-template-rows: minmax(0, 1fr) auto clamp(20rem, 46vh, 34rem); }
+  .workspace:where(:not(.detector-expanded)):has([data-dock-tab="probe"].active) { grid-template-rows: minmax(0, 1fr) auto clamp(25rem, 52vh, 31rem); }
 }
-.pane-probe { grid-template-columns: minmax(14rem, 1fr) minmax(0, 2fr); }
+.pane-probe { grid-template-columns: minmax(16rem, 1fr) minmax(0, 1.6fr); }
+.pane-probe .pane-section { gap: var(--s1); }
 .pane-vehicle { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr); }
 
 .pane-section { display: flex; flex-direction: column; gap: var(--s2); min-width: 0; min-height: 0; }
@@ -556,8 +567,8 @@ body[data-search-alert=active] #mode-align-btn:not(:disabled) { border-color: va
 .probe-map-centers > div { display: flex; gap: var(--s1); }
 .probe-map-centers dt { color: var(--muted); }
 .probe-map-centers dd { margin: 0; color: var(--text); font-family: var(--mono); }
-.probe-scan-plot { display: grid; place-items: center; flex: 1 0 auto; min-height: 6rem; background: var(--bg-sunken); border-radius: var(--radius-sm); }
-#probe-scan-map { display: block; width: 100%; height: clamp(7rem, 17vh, 12rem); }
+.probe-scan-plot { display: grid; place-items: center; flex: 1 0 auto; min-height: 5rem; background: var(--bg-sunken); border-radius: var(--radius-sm); }
+#probe-scan-map { display: block; width: 100%; height: clamp(5rem, 12vh, 8rem); }
 #probe-scan-map[hidden], #probe-map-empty[hidden] { display: none; }
 #probe-scan-map .scan-ring, #probe-scan-map .scan-ray { fill: none; stroke: var(--line-strong); stroke-width: 1; }
 #probe-scan-map .scan-center { fill: none; stroke: var(--muted); stroke-dasharray: 3 4; vector-effect: non-scaling-stroke; }
@@ -566,7 +577,7 @@ body[data-search-alert=active] #mode-align-btn:not(:disabled) { border-color: va
 #probe-scan-map .map-contact { fill: var(--danger); }
 #probe-scan-map .map-clear { fill: var(--accent); }
 #probe-scan-map .map-unknown { fill: var(--bg-sunken); stroke: var(--muted); stroke-width: 2; }
-.probe-map-readings { display: grid; grid-template-columns: repeat(auto-fit, minmax(6rem, 1fr)); gap: var(--s1) var(--s2); padding: 0; margin: 0; list-style: none; font: var(--fs-sm) var(--mono); }
+.probe-map-readings { display: grid; grid-template-columns: repeat(auto-fit, minmax(5rem, 1fr)); gap: var(--s1) var(--s2); padding: 0; margin: 0; list-style: none; font: var(--fs-sm) var(--mono); }
 .probe-map-readings[hidden] { display: none; }
 .probe-map-readings li { display: grid; grid-template-columns: auto 1fr; column-gap: var(--s1); padding: var(--s1) 0; border-bottom: 1px solid var(--line); color: var(--muted); }
 .probe-map-readings strong { grid-column: 2; color: var(--text); }
@@ -583,10 +594,16 @@ body[data-search-alert=active] #mode-align-btn:not(:disabled) { border-color: va
 
 .probe-trace-heading { padding-top: var(--s1); min-height: 0; }
 .probe-trace-heading h3 { margin-right: auto; font-size: var(--fs-sm); }
-.manual-probe-chart { flex: 0 0 auto; height: clamp(10rem, 21vh, 13rem); }
-.probe-graphic { position: relative; height: 2.5rem; flex: none; border-bottom: 2px solid var(--line-strong); border-radius: var(--radius-sm) var(--radius-sm) 0 0; background: linear-gradient(var(--surface-2) 60%, var(--bg-sunken) 60%); }
+.manual-probe-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--s1) var(--s2); }
+.manual-probe-controls label { grid-column: 1 / -1; }
+.manual-probe-controls input { min-height: var(--control-h); }
+.manual-probe-chart { flex: 1 1 auto; min-height: 6rem; height: clamp(6rem, 15vh, 10rem); }
+.manual-probe-readouts > div { display: flex; align-items: baseline; gap: var(--s1); }
+.manual-probe-readouts dd { margin: 0; }
+.probe-diagnostics-panel > :not(.manual-probe-chart) { flex-shrink: 0; }
+.probe-graphic { position: relative; width: 4rem; height: calc(2 * var(--s3)); flex: none; border-bottom: 2px solid var(--line-strong); border-radius: var(--radius-sm) var(--radius-sm) 0 0; background: linear-gradient(var(--surface-2) 60%, var(--bg-sunken) 60%); }
 .probe-graphic i { position: absolute; bottom: -.15rem; left: 50%; height: .7rem; border-left: 3px solid var(--text); }
-.probe-graphic span { position: absolute; left: 50%; top: .25rem; width: .3rem; height: 2.1rem; max-height: 2.1rem; background: var(--text); transform: scaleY(0); transform-origin: top; }
+.probe-graphic span { position: absolute; left: 50%; top: .25rem; width: .3rem; height: var(--s4); max-height: var(--s4); background: var(--text); transform: scaleY(0); transform-origin: top; }
 .pressure-heading small { color: var(--muted); }
 .more { font-size: var(--fs-xs); color: var(--muted); }
 .more > summary { padding: var(--s1) 0; }
@@ -691,11 +708,29 @@ body[data-search-alert=active] #mode-align-btn:not(:disabled) { border-color: va
 .probe-cycle-card { display: grid; gap: var(--s2); }
 .probe-cycle-input-wrap { display: flex; align-items: center; gap: var(--s1); }
 .probe-cycle-input-wrap input { width: 5rem; text-align: right; }
+.probe-cycle-input-wrap output { color: var(--text); font-family: var(--mono); }
 .unit { color: var(--muted); font-size: var(--fs-xs); }
 .probe-cycle-alert { display: flex; align-items: center; gap: var(--s2); padding: var(--s2); border: 1px solid var(--danger); border-radius: var(--radius-sm); background: var(--danger-soft); color: var(--danger-text); font-size: var(--fs-xs); }
 #probe-stop { width: 100%; }
 
 .setup-shortcuts { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s2); margin-top: auto; padding-top: var(--pad); border-top: 1px solid var(--line); }
+
+/* Laptop height keeps the mission actions and probe stop in view. */
+@media (min-width: 1001px) and (min-height: 601px) and (max-height: 850px) {
+  .task-workbench { gap: var(--s2); padding: var(--s2); }
+  .task-workbench .workflow-buttons { gap: var(--s1); }
+  .task-workbench .mode-btn {
+    grid-template-areas: "num text badge";
+    min-height: var(--control-h); padding: var(--s1) var(--s2); gap: var(--s2);
+  }
+  .task-workbench .mode-desc { display: none; }
+  .task-workbench .workflow-status { padding: var(--s1) var(--s2); }
+  .task-workbench .task-controls { padding-top: var(--s2); }
+  .task-workbench .task-controls[open] > summary { margin-bottom: var(--s2); }
+  .task-workbench .task-controls > * + *:not(summary) { margin-top: var(--s2); }
+  .task-workbench .probe-numbers > span { padding: var(--s1) var(--s2); }
+  .task-workbench .setup-shortcuts { padding-top: var(--s2); }
+}
 
 @media (prefers-reduced-motion: reduce) { .mode-btn, button, .task-controls > summary::before { transition: none; } .search-alert-icon { animation: none !important; } }
 
