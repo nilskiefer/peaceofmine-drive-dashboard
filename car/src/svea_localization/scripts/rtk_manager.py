@@ -4,6 +4,7 @@
 Author: Mustafa Al-Janabi
 """
 from serial import Serial, SerialException, EIGHTBITS, PARITY_NONE, STOPBITS_ONE
+from pathlib import Path
 from pyubx2 import (
     UBXReader,
     SET,
@@ -65,20 +66,20 @@ class RTKManager(Node):
     def __init__(self):
         super().__init__("rtk_manager")
         # Read parameters
-        self.declare_parameter('device', '/dev/ttyACM0')
+        self.declare_parameter('device', '/dev/ttyAMA0')
         self.device = self.get_parameter('device').value #UART: /dev/ttyS0
-        if "/dev/ttyACM" in self.device or "/dev/gps" in self.device:
+        if Path(self.device).resolve().name.startswith(('ttyACM', 'ttyUSB')) or "/dev/gps" in self.device:
             self.rateUART1 = 0
             self.rateUSB = 1
         else:
             self.rateUART1 = 1
             self.rateUSB = 0
-        self.declare_parameter('~baud', 250000)
-        self.baud = self.get_parameter('~baud').value #UART: 38400
-        self.declare_parameter('~gps_frame', 'gps')
-        self.frame_id = self.get_parameter('~gps_frame').value
-        self.declare_parameter('~dynamic_model', 'portable')
-        self.dynamic_model = self.get_parameter('~dynamic_model').value
+        self.declare_parameter('baud', 115200)
+        self.baud = self.get_parameter('baud').value
+        self.declare_parameter('gps_frame', 'gps')
+        self.frame_id = self.get_parameter('gps_frame').value
+        self.declare_parameter('dynamic_model', 'portable')
+        self.dynamic_model = self.get_parameter('dynamic_model').value
         # Setup ROS Rate
         self.rate = self.create_rate(self.RATE)
         #  Open serial port

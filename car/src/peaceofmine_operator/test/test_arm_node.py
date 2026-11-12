@@ -79,23 +79,28 @@ class ActuatorTest(unittest.TestCase):
         from peaceofmine_operator.probe_contact_settings import DEFAULTS
         options = {**DEFAULTS,'source':'esp32','threshold_counts':50.}
         configuration.save_section(self.path,'probe_contact',options)
-        raw = dict(connected=True,fresh=True,raw_counts=1200,error=None)
+        raw = dict(connected=True,fresh=True,raw_counts=1300,filtered_counts=1200,error=None)
         self.probe.simulation = False
         self.probe.loadcell.last_ms = 100
         self.probe.loadcell.session = 1
         try:
-            with patch.object(self.probe.loadcell,'poll'), patch.object(self.probe.loadcell,'snapshot',return_value=raw):
+            with patch.object(self.probe.loadcell,'poll'), patch.object(self.probe.loadcell,'snapshot',return_value=raw), \
+                    patch.object(self.probe.loadcell,'zero_average',return_value=1200) as average:
                 self.probe.reload_contact()
                 self.probe.loadcell_command(String(data=json.dumps(dict(action='zero',request_id='zero-test'))))
                 self.assertIsNotNone(self.probe.settings.pending)
-                self.spin(.2)
+                deadline=time.monotonic()+2
+                while self.probe.settings.pending and time.monotonic()<deadline:
+                    self.spin(.05)
                 saved = configuration.load(self.path)['probe_contact']
                 self.assertEqual(saved['zero_counts'],1200)
+                average.assert_called_once()
                 self.assertTrue(self.probe.last_command['success'])
                 self.assertEqual(self.probe.loadcell_state()['net_counts'],0)
                 self.probe.loadcell.session += 1
                 self.probe.loadcell.last_ms = 200
                 raw['raw_counts'] = 1250
+                raw['filtered_counts'] = 1150
                 self.probe.poll_loadcell()
                 self.assertEqual(self.probe.loadcell_state()['net_counts'],50)
                 self.assertTrue(self.probe.contact.snapshot()['detected'])

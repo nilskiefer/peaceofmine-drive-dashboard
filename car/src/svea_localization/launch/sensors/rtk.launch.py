@@ -4,8 +4,8 @@ from better_launch import BetterLaunch, launch_this
 @launch_this
 def main(
     ## RTK RECEIVER ARGUMENTS
-    device: str = "/dev/ttyACM0",           # /dev/ttyS0 if connected via UART
-    baud: int = 250000,                     # 38400 if connected via UART
+    device: str = "/dev/ttyAMA0",          # Pi GPIO UART; use a by-id link for USB
+    baud: int = 115200,
     dynamic_model: str = "portable",
     ## NTRIP CLIENT ARGUMENTS (for swepos network rtk)
     host: str = "nrtk-swepos.lm.se",

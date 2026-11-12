@@ -25,7 +25,7 @@ def main(
     lidar_ip: str = '192.168.0.10',
     # RTK-GPS Settings
     use_rtk: bool = True,
-    rtk_device: str = '/dev/ttyACM1',
+    rtk_device: str = '/dev/ttyAMA0',
     rtk_baud: int = 115200,
     rtk_username: str = '',
     rtk_password: str = '',

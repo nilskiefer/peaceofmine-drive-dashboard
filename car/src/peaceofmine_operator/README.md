@@ -55,8 +55,11 @@ ros2 launch peaceofmine_operator operator.launch.xml is_sim:=false \
   front_camera_device:=/dev/v4l/by-id/usb-Sonix_Technology_Co.__Ltd._H264_USB_Camera_SN0001-video-index0
 ```
 
-The resolver converts that stable link to its capture node before starting
-`usb_cam`. Live ROS camera topics are discovered by the gateway and are the
+The resolver passes that stable link to `usb_cam`. Automatic discovery sorts
+the persistent links; cameras without a by-id link use by-path when available.
+With multiple cameras, save explicit by-id paths in the capture settings to
+bind each camera to its role even when another camera is added or removed.
+Live ROS camera topics are discovered by the gateway and are the
 only Raspberry Pi camera sources shown in the dashboard settings.
 Their topics are `/self/camera_front/image_raw` and
 `/self/camera_auxiliary/image_raw`. `web_video_server` converts those ROS image
@@ -67,6 +70,25 @@ camera session before starting the ROS stack.
 
 `fixture_angle_offset_deg` sets the centre angle of the forward fixture, for
 example `fixture_angle_offset_deg:=10.0`.
+
+## Peripheral identity
+
+The browser consumes ROS telemetry; hardware nodes select devices on the Pi:
+
+| Peripheral | Selection |
+| --- | --- |
+| PX4 | Its configured `/dev/serial/by-id/usb-SVEA_PX4_AUTOPILOT_0-if00` |
+| Arm/probe servo bus | FTDI `/dev/serial/by-id` discovery, with servo validation |
+| ESP32/HX711 | USB VID/PID discovery followed by its `/dev/serial/by-id` link; ambiguous matches are rejected |
+| GNSS | GPIO UART `/dev/ttyAMA0` at 115200; USB receivers need an explicit by-id override |
+| USB cameras | `/dev/v4l/by-id`, then by-path; explicit capture settings pin roles |
+| ADS1115 | Configured I2C bus/address, currently bus 1 at `0x48` |
+| Hokuyo LiDAR | Ethernet address, configured as `192.168.0.10` |
+
+USB by-id links follow the device identity across port renumbering. Devices
+without unique serial numbers may need by-path or a custom udev rule instead;
+by-path follows the physical USB socket. On this Pi `/dev/serial0` points to
+the debug UART (`ttyAMA10`), so it must not replace the GNSS GPIO UART.
 
 ## Metal detector I2C acquisition (legacy Arduino / ESP32 serial deprecated)
 

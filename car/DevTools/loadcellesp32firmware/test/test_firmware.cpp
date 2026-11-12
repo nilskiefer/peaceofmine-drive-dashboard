@@ -1,5 +1,6 @@
 // Run: c++ -std=c++17 -Wall -Wextra -Werror -Itest/stubs test/test_firmware.cpp -o /tmp/loadcell-test && /tmp/loadcell-test
 #include <cassert>
+#include <climits>
 #include "../src/main.cpp"
 
 void samples(long value) { scale.samples.assign(AVERAGE_SAMPLES, value); }
@@ -12,10 +13,11 @@ void send(const std::string &text) {
 
 int main() {
   setup();
+  assert(watchdogSubscribed && watchdogConfig.timeout_ms == 3000 && watchdogConfig.trigger_panic);
   nowMs = 100;
   scale.samples.push_back(1000);
   loop();
-  assert(Serial.output == "100,1000,,\n");
+  assert(Serial.output == "100,1000,,,1000.0\n");
   send("calibrate 500\n");
   assert(outputHas("ERROR unload and tare"));
 
@@ -29,7 +31,8 @@ int main() {
   nowMs = 200;
   scale.samples.push_back(3500);
   loop();
-  assert(Serial.output == "200,3500,2500.0,250.000\n");
+  assert(Serial.output.find("200,3500,2500.0,250.000,") == 0);
+  assert(filteredCounts > 1000 && filteredCounts < 3500);
 
   for (const char *invalid : {"0", "-1", "nan", "inf", "1e999", "1e-999", "500junk", ""}) {
     send(std::string("calibrate ") + invalid + "\n");
@@ -68,5 +71,40 @@ int main() {
   countsPerGram = NAN;
   setup();
   assert(!tared && countsPerGram == -10);
-  puts("PASS: streaming, tare, calibration, persistence, invalid commands, timeout, saturation");
+  // 80 SPS conversions are emitted immediately, without the old 100 ms cap.
+  scale.samples.clear();
+  Serial.output.clear();
+  nowMs += 13;
+  scale.samples.push_back(1000);
+  loop();
+  assert(!Serial.output.empty());
+  const double before = filteredCounts;
+  nowMs += 13;
+  scale.samples.push_back(2000);
+  loop();
+  assert(filteredCounts > before && filteredCounts < 2000);
+  // A stalled sensor emits no pretend samples and resets filter history.
+  Serial.output.clear();
+  scale.samples.clear();
+  nowMs += SENSOR_TIMEOUT_MS;
+  loop();
+  assert(outputHas("ERROR hx711_timeout") && !filterReady);
+  Serial.output.clear();
+  nowMs += 13;
+  scale.samples.push_back(-5000);
+  loop();
+  assert(filteredCounts == -5000);
+  // Filter timing also works across millis() rollover on the ESP32.
+  filterReady = true;
+  filterAtMs = ULONG_MAX - 5;
+  filteredCounts = 0;
+  const double wrapped = filterCounts(1000, 7);
+  assert(wrapped > 0 && wrapped < 1000);
+  // Missing conversions retry the HX711 while the main task remains watched.
+  scale.samples.clear();
+  nowMs += SENSOR_RECOVERY_MS;
+  const unsigned int feeds = watchdogFeeds;
+  loop();
+  assert(scale.powerCycles == 1 && watchdogFeeds > feeds && !filterReady);
+  puts("PASS: native-rate streaming, low-pass, watchdog setup/feeds, sensor recovery, tare, calibration, persistence, invalid commands, saturation");
 }

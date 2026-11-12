@@ -101,6 +101,8 @@
     <arg name="is_indoor" value="$(var is_indoor)"/>
     <arg name="use_lidar" value="$(var use_lidar)"/>
     <arg name="use_rtk" value="$(var use_rtk)"/>
+    <arg name="gnss_device" value="$(var gnss_device)"/>
+    <arg name="gnss_baud" value="$(var gnss_baud)"/>
   </include>
 
 

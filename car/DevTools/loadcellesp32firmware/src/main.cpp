@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <HX711.h>
 #include <Preferences.h>
+#include <esp_task_wdt.h>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -9,12 +10,43 @@ constexpr uint8_t DATA_PIN = D0;   // XIAO ESP32-C6 GPIO0 -> HX711 DAT
 constexpr uint8_t CLOCK_PIN = D1;  // XIAO ESP32-C6 GPIO1 -> HX711 CLK
 constexpr unsigned long SENSOR_TIMEOUT_MS = 1000;
 constexpr unsigned int AVERAGE_SAMPLES = 10;
+constexpr double FILTER_TAU_MS = 40.0;
+constexpr unsigned long WATCHDOG_TIMEOUT_MS = 3000;
+constexpr unsigned long SENSOR_RECOVERY_MS = 3000;
 
 HX711 scale;
 Preferences settings;
 double countsPerGram = NAN;
 double tareCounts = 0;
 bool tared = false;
+bool filterReady = false;
+double filteredCounts = 0;
+unsigned long filterAtMs = 0;
+unsigned long lastSampleMs = 0;
+unsigned long lastErrorMs = 0;
+unsigned long lastRecoveryMs = 0;
+
+void startWatchdog() {
+  esp_task_wdt_config_t config = {};
+  config.timeout_ms = WATCHDOG_TIMEOUT_MS;
+  config.idle_core_mask = 0;
+  config.trigger_panic = true;
+  esp_err_t result = esp_task_wdt_init(&config);
+  if (result == ESP_ERR_INVALID_STATE) result = esp_task_wdt_reconfigure(&config);
+  ESP_ERROR_CHECK(result);
+  if (esp_task_wdt_status(nullptr) != ESP_OK) ESP_ERROR_CHECK(esp_task_wdt_add(nullptr));
+}
+
+void feedWatchdog() { ESP_ERROR_CHECK(esp_task_wdt_reset()); }
+
+double filterCounts(long raw, unsigned long now) {
+  const unsigned long elapsed = now - filterAtMs;
+  if (!filterReady || elapsed >= SENSOR_TIMEOUT_MS) filteredCounts = raw;
+  else filteredCounts += (1.0 - std::exp(-static_cast<double>(elapsed) / FILTER_TAU_MS)) * (raw - filteredCounts);
+  filterReady = true;
+  filterAtMs = now;
+  return filteredCounts;
+}
 
 bool readCounts(long &raw) {
   if (!scale.wait_ready_timeout(SENSOR_TIMEOUT_MS, 1)) {
@@ -32,6 +64,7 @@ bool readCounts(long &raw) {
 bool readAverage(double &average) {
   int64_t sum = 0;
   for (unsigned int i = 0; i < AVERAGE_SAMPLES; ++i) {
+    feedWatchdog();
     long raw;
     if (!readCounts(raw)) return false;
     sum += raw;
@@ -50,7 +83,8 @@ void command(const char *line) {
     Serial.println("# commands: help | status | tare | calibrate <grams>");
     Serial.println("# unload and tare, add a known mass, then calibrate 500 (for 500 g)");
     Serial.println("# calibration is saved; tare is required after every reboot");
-    Serial.println("# CSV: ms,raw_counts,net_counts,grams; empty fields mean unavailable");
+    Serial.println("# CSV: ms,raw_counts,net_counts,grams,filtered_counts; empty fields mean unavailable");
+    Serial.println("# Native HX711 rate (10/80 SPS via RATE jumper); low-pass time constant 40 ms");
   } else if (strcmp(line, "status") == 0) {
     printStatus();
   } else if (strcmp(line, "tare") == 0) {
@@ -114,6 +148,15 @@ void pollCommands() {
 
 void setup() {
   Serial.begin(115200);
+  startWatchdog();
+#ifdef LOAD_CELL_WATCHDOG_SELF_TEST
+  // Test builds deliberately stop feeding the watchdog. Never enable this
+  // flag for the firmware left on the probe after validation.
+  Serial.println("# watchdog self-test: deliberately stalling");
+  while (true) delay(100);
+#endif
+  filterReady = false;
+  lastSampleMs = lastErrorMs = lastRecoveryMs = millis();
   scale.begin(DATA_PIN, CLOCK_PIN, 128);
   scale.power_up();
   // A disconnected DAT wire must read high instead of floating as a fake sample.
@@ -136,25 +179,42 @@ void setup() {
 }
 
 void loop() {
-  static unsigned long lastSampleMs = 0;
+  feedWatchdog();
   pollCommands();
-  // Limit USB output to 10 Hz even if the HX711 RATE jumper selects 80 SPS.
-  if (millis() - lastSampleMs < 100) {
+  // Read every real conversion. Never emit duplicate samples to imitate a
+  // higher rate: the HX711 RATE jumper chooses 10 or 80 samples/second.
+  if (!scale.is_ready()) {
+    const unsigned long now = millis();
+    if (now - lastSampleMs >= SENSOR_TIMEOUT_MS && now - lastErrorMs >= SENSOR_TIMEOUT_MS) {
+      Serial.println("# ERROR hx711_timeout: check power, DAT and CLK");
+      lastErrorMs = now;
+      filterReady = false;
+    }
+    if (now - lastSampleMs >= SENSOR_RECOVERY_MS && now - lastRecoveryMs >= SENSOR_RECOVERY_MS) {
+      scale.power_down();
+      delay(1);
+      scale.power_up();
+      pinMode(DATA_PIN, INPUT_PULLUP);
+      lastRecoveryMs = millis();
+      filterReady = false;
+      Serial.println("# HX711 recovery: power cycle requested");
+    }
     delay(1);
     return;
   }
   long raw;
   if (!readCounts(raw)) {
-    lastSampleMs = millis();
-    delay(100);
+    filterReady = false;
+    delay(1);
     return;
   }
   lastSampleMs = millis();
+  const double filtered = filterCounts(raw, lastSampleMs);
   Serial.printf("%lu,%ld,", lastSampleMs, raw);
   if (tared) Serial.printf("%.1f", raw - tareCounts);
   Serial.print(",");
   if (tared && std::isfinite(countsPerGram)) {
     Serial.printf("%.3f", (raw - tareCounts) / countsPerGram);
   }
-  Serial.println();
+  Serial.printf(",%.1f\n", filtered);
 }

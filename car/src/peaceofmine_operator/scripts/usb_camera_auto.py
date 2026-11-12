@@ -16,9 +16,14 @@ from ament_index_python.packages import get_package_prefix
 
 
 def matching_capture_devices(context: pyudev.Context) -> list[str]:
-    by_id = sorted(set(str(Path(path).resolve()) for path in glob('/dev/v4l/by-id/*video-index0')))
-    if by_id:
-        return by_id
+    for directory in ('by-id', 'by-path'):
+        paths = sorted(glob(f'/dev/v4l/{directory}/*video-index0'))
+        if paths:
+            # Keep the persistent names when passing devices to usb_cam.
+            devices = {}
+            for path in paths:
+                devices.setdefault(str(Path(path).resolve()), path)
+            return list(devices.values())
 
     matches = []
     for device in context.list_devices(subsystem='video4linux'):
@@ -39,7 +44,7 @@ def resolve_device(timeout_s: float = 8.0) -> str:
         resolved = str(Path(explicit).resolve())
         if not Path(resolved).exists():
             raise RuntimeError(f'Configured camera device does not exist: {explicit}')
-        return resolved
+        return explicit
 
     camera_index = int(os.environ.get('POM_CAMERA_INDEX', '0'))
     context = pyudev.Context()

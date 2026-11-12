@@ -12,7 +12,8 @@ from launch_ros.actions import Node
 DEFAULTS = dict(name='self', is_sim='true', initial_pose_x='0.0', initial_pose_y='0.0',
                 initial_pose_a='0.0', lli_serial_device='/dev/serial/by-id/usb-SVEA_PX4_AUTOPILOT_0-if00',
                 lli_baud_rate='921600', use_localization='false', is_indoor='true',
-                use_lidar='false', use_rtk='false')
+                use_lidar='false', use_rtk='false',
+                gnss_device='/dev/ttyAMA0', gnss_baud='115200')
 
 
 def bringup(context):
@@ -34,7 +35,9 @@ def bringup(context):
         keys = ('name', 'is_sim', 'is_indoor', 'use_lidar', 'use_rtk',
                 'initial_pose_x', 'initial_pose_y', 'initial_pose_a')
         actions.append(ExecuteProcess(cmd=['ros2', 'launch', 'svea_localization', 'localization.launch.py',
-                                           *(f'{key}:={values[key]}' for key in keys)], output='screen'))
+                                           *(f'{key}:={values[key]}' for key in keys),
+                                           f"rtk_device:={values['gnss_device']}",
+                                           f"rtk_baud:={values['gnss_baud']}"], output='screen'))
     return actions
 
 

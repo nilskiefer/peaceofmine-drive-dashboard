@@ -29,7 +29,12 @@ filename, for example `ros2 launch svea_localization lidar.launch.py`.
 | `base_frame` | `{name}/base_link` |
 | `map_pkg`, `map_name` | `svea_core`, `sml` |
 | `lidar_ip` | `192.168.0.10` |
-| `rtk_device`, `rtk_baud` | `/dev/ttyACM1`, 115200 |
+| `rtk_device`, `rtk_baud` | `/dev/ttyAMA0`, 115200 |
+
+This Pi's GNSS receiver uses the GPIO UART, whose name is independent of USB
+enumeration. For a USB GNSS receiver, set `rtk_device` to its specific
+`/dev/serial/by-id/...` link. The operator launch forwards its `gnss_device`
+and `gnss_baud` to outdoor RTK localization so both modes select the same receiver.
 
 On hardware, the local EKF reads MAVROS IMU and wheel odometry and publishes
 `/{name}/odometry/local`. Indoor AMCL provides map alignment. With one encoder,

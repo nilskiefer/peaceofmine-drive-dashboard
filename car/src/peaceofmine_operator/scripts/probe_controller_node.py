@@ -58,7 +58,7 @@ class ProbeController(ActuatorController):
         self.loadcell = LoadCellSerial()
         self.reload_contact()
         self.create_subscription(String, 'probe/loadcell_command', self.loadcell_command, 10)
-        self.create_timer(.05, self.poll_loadcell)
+        self.create_timer(.01, self.poll_loadcell)
         self.depth_pub = self.create_publisher(Float32, 'probe/depth_mm', 10)
         self.pressure_pub = self.create_publisher(Float32, 'probe/pressure_ratio', 10)
         self.contact_pub = self.create_publisher(ContactState, 'probe/contact', 1)
@@ -143,8 +143,9 @@ class ProbeController(ActuatorController):
         state = self.loadcell.snapshot(include_history)
         zero = self.contact_settings['zero_counts']
         zeroed = zero is not None
+        signal = state['filtered_counts'] if state['filtered_counts'] is not None else state['raw_counts']
         return dict(**state, zeroed=zeroed,
-                    net_counts=state['raw_counts']-zero if state['fresh'] and zeroed else None,
+                    net_counts=abs(signal-zero) if state['fresh'] and zeroed else None,
                     busy=bool(self.settings.pending))
 
     def loadcell_command(self, msg):
@@ -164,7 +165,7 @@ class ProbeController(ActuatorController):
             options = probe_contact_settings.validate(saved.get('probe_contact',probe_contact_settings.DEFAULTS))
             if options['source'] != 'esp32':
                 raise ValueError('Contact source changed; wait for the selected load cell')
-            value = dict(options, zero_counts=state['raw_counts'])
+            value = dict(options, zero_counts=self.loadcell.zero_average())
             self.contact.received = 0.
             def complete(ok, message):
                 if ok:

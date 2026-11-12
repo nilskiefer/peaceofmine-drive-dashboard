@@ -18,7 +18,8 @@ from peaceofmine_operator.node_runner import run_node
 class SensorSerialNode(Node):
     def __init__(self):
         super().__init__('sensor_serial')
-        defaults = dict(calibration_file=calibration.default_path(), serial_port='/dev/ttyACM0', baud_rate=115200,
+        defaults = dict(calibration_file=calibration.default_path(),
+                        serial_port='/dev/serial/by-id/usb-Arduino_Srl_Arduino_Uno_7543134333435170D1E2-if00', baud_rate=115200,
                         stale_timeout=0.5, reconnect_interval=1.0,
                         baseline_adc=0.0, full_response_adc=255.0, reference_voltage=5.0,
                         amplitude_topic='detector/amplitude_adc',

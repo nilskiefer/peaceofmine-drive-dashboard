@@ -55,7 +55,9 @@ pio device monitor --port /dev/cu.usbmodem1101
 ```
 
 The port above was detected on the development Mac. Choose the actual port
-reported by `pio device list`; on the Pi it is usually `/dev/ttyACM0`.
+reported by `pio device list`. On the Pi use its persistent link, currently
+`/dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_58:E6:C5:19:87:68-if00`,
+instead of a numbered `ttyACM` port.
 On this Mac, PlatformIO is installed at `~/.platformio/penv/bin/pio` if `pio`
 is not on PATH. Close any other serial monitor before uploading. To enter
 download mode if necessary, hold BOOT, press/release RESET, then release BOOT.
@@ -94,21 +96,33 @@ An error leaves the previous tare and calibration unchanged.
 
 ## USB data format
 
-One CSV record per reading, capped at 10 Hz. Default HX711 hardware rate is
-10 SPS; this firmware does not require changing its RATE jumper.
+One CSV record per fresh HX711 conversion, with no software 10 Hz cap. The
+HX711's hardware RATE setting selects approximately 10 or 80 samples/second.
+On the SparkFun board the RATE jumper is normally closed for 10 SPS; opening
+it selects 80 SPS (verify the board revision against its schematic). Software
+cannot change that jumper or create additional real conversions.
 
 ```text
-ms,raw_counts,net_counts,grams
-1200,123456,,
-2400,123460,4.0,
-3600,133456,10000.0,500.000
+ms,raw_counts,net_counts,grams,filtered_counts
+1200,123456,,,123456.0
+2400,123460,4.0,,123460.0
+3600,133456,10000.0,500.000,133456.0
 ```
 
 The header above describes the columns; it is not emitted on every connection.
 `ms` is time since boot (wraps after about 49.7 days). Raw counts are signed
 24-bit ADC values. Net counts are empty until tare; grams are empty until both
 tare and calibration are available. Blank means **unavailable**, never zero.
-Streaming samples are unfiltered; only tare and calibration use averaging.
+The original four columns retain their meaning. The fifth column is a one-pole
+low-pass of signed raw counts, with a fixed 40 ms time constant (about 4 Hz
+cutoff). It uses the actual conversion interval, seeds from the first reading,
+and resets after sensor faults. Raw counts stay available for diagnostics.
+The filter adds response delay; it does not increase the sensor's sample rate.
+
+A 3-second ESP32 task watchdog watches the main firmware task and restarts the
+board if it stalls. Missing conversions produce a timeout after 1 second and
+retry HX711 power-up every 3 seconds, without emitting pretend readings. The
+Pi independently marks readings stale after 0.5 seconds and stops extension.
 
 All command responses and errors start with `#`. A host CSV reader should
 handle/skip those lines. Examples:
@@ -142,9 +156,13 @@ those require the wired HX711 and a known test mass.
 
 Connect the ESP32 USB to the car. In **Setup → Probe contact**, select **ESP32
 load cell**, save, press **Zero** with the probe clear, then set a threshold
-using the live counts graph. No mass calibration or device identification is
-needed. The dashboard uses raw counts only; it ignores the standalone gram
-column and `tare`/`calibrate` commands described above.
+using the live counts graph. Wait for 10 continuous seconds with the probe
+unloaded before pressing **Zero**: the Pi saves the mean of that window's
+filtered readings. After zero, the graph and threshold use
+`abs(filtered_counts - zero_counts)`, so either direction triggers contact.
+No mass calibration or device identification is needed. The dashboard ignores
+the standalone gram column and `tare`/`calibrate` commands described above.
+Older four-column firmware remains readable, using raw counts as its signal.
 
 The source, threshold and zero are saved in the car's Git-tracked
 `operator_config.json`. Saving changes the local file; Git commits/pushes are

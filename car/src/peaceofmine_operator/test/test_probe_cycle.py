@@ -120,15 +120,15 @@ class ProbeCycleTest(unittest.TestCase):
         self.assertEqual(self.probe.last_probe_result['status'], 'ABORTED')
         self.assertIn('Contact input lost', self.probe.last_probe_result['reason'])
 
-    def test_saved_zero_uses_raw_counts_without_mass_calibration(self):
+    def test_saved_zero_uses_absolute_filtered_counts_without_mass_calibration(self):
         self.probe.contact_settings = dict(zero_counts=1000)
         self.probe.settings = MagicMock()
         self.probe.settings.pending = None
         self.probe.loadcell = MagicMock()
-        self.probe.loadcell.snapshot.return_value = dict(fresh=True,raw_counts=1123)
+        self.probe.loadcell.snapshot.return_value = dict(fresh=True,raw_counts=2000,filtered_counts=877)
         self.assertEqual(self.probe.loadcell_state()['net_counts'],123)
         self.assertTrue(self.probe.loadcell_state()['zeroed'])
-        self.probe.loadcell.snapshot.return_value.update(fresh=False,raw_counts=None)
+        self.probe.loadcell.snapshot.return_value.update(fresh=False,raw_counts=None,filtered_counts=None)
         self.assertIsNone(self.probe.loadcell_state()['net_counts'])
 
     def test_zero_save_blocks_probe_motion_and_defers_source_changes(self):

@@ -118,8 +118,9 @@
     }
     const live = state.connected && cell?.connected && cell.fresh && !cell.busy;
     const zeroed = cell?.zeroed && Number.isFinite(saved?.zero_counts);
-    const value = zeroed ? cell?.net_counts : cell?.raw_counts;
-    const reading = live && Number.isFinite(value) ? `${Math.round(value)} counts${zeroed ? '' : ' · raw'}` : '—';
+    const filtered = Number.isFinite(cell?.filtered_counts);
+    const value = zeroed ? cell?.net_counts : filtered ? cell.filtered_counts : cell?.raw_counts;
+    const reading = live && Number.isFinite(value) ? `${Math.round(value)} counts · ${filtered ? 'filtered' : 'raw'}${zeroed ? ' · magnitude from zero' : ''}` : '—';
     const contact = state.probe?.adc_contact_state;
     const cellStatus = !live ? cell?.error || 'Waiting for the ESP32 load cell.'
       : `${contact?.source === 'esp32' && contact.fresh ? (contact.detected === true ? 'CONTACT' : 'Clear') : zeroed ? 'Live' : 'Zero needed'} · ${reading}`;
@@ -134,10 +135,11 @@
     }
     if (cellPending && performance.now() - cellPending.at > 5000) { cellPending = null; cellMessage = 'No zero confirmation. Check the connection and retry.'; }
     const moving = state.probe?.active || state.probe?.moving || state.probe?.homing || state.probe?.cycle_active || state.actuators?.probe?.homing || state.actuators?.probe?.torque;
-    cellZero.disabled = !owner || saved?.source !== 'esp32' || !live || !Number.isFinite(cell.raw_counts) || moving || Boolean(cellPending) || Boolean(sourcePending) || sourceChanged();
+    cellZero.disabled = !owner || saved?.source !== 'esp32' || !live || !Number.isFinite(cell.raw_counts) || cell.can_zero === false || moving || Boolean(cellPending) || Boolean(sourcePending) || sourceChanged();
     document.getElementById('loadcell-feedback').textContent = cellPending || cell?.busy ? 'Saving zero on car…'
-      : cellMessage || (moving ? 'Stop the probe and release torque before zeroing.' : live && !zeroed ? 'Lift the probe clear, then zero it.' : live && !saved?.threshold_counts ? 'Press the sensor and choose a threshold from the graph.' : '');
-    document.getElementById('contact-history').setAttribute('aria-label', esp32 ? 'Load-cell counts and positive and negative contact thresholds over the last 30 seconds' : 'Filtered contact sensor voltage and contact limit over the last 30 seconds');
+      : moving ? 'Stop the probe and release torque before zeroing.' : live && cell.can_zero === false ? 'Keep the probe unloaded for 10 continuous seconds before zeroing.'
+      : cellMessage || (live && !zeroed ? 'Lift the probe clear, then zero it.' : live && !saved?.threshold_counts ? 'Press the sensor and choose a threshold from the graph.' : '');
+    document.getElementById('contact-history').setAttribute('aria-label', esp32 ? 'Load-cell counts, shown as magnitude from zero after zeroing, and contact threshold over the last 30 seconds' : 'Filtered contact sensor voltage and contact limit over the last 30 seconds');
   }
   window.operatorContactSourceFrame = renderContactSource;
   const editSource = () => { sourceDirty = true; sourceMessage = ''; renderContactSource(); if (contactChart) contactChart.$frameBucket = null; window.operatorADCFrame?.(); };
@@ -644,19 +646,25 @@
     const zeroed = cell?.zeroed && Number.isFinite(saved?.zero_counts);
     const elapsed = Math.max(0,(performance.now()-cellHistoryAt)/1000);
     const data = [];
+    let hasFiltered = false, hasRaw = false;
     if (state.connected) for (const point of cellHistory) {
       const x = point.x - elapsed;
-      if (!Number.isFinite(x) || x < -30 || x > 0 || !Number.isFinite(point.raw_counts)) continue;
+      const filtered = Number.isFinite(point.filtered_counts);
+      const value = filtered ? point.filtered_counts : point.raw_counts;
+      if (!Number.isFinite(x) || x < -30 || x > 0 || !Number.isFinite(value)) continue;
+      if (filtered) hasFiltered = true; else hasRaw = true;
       if (data.length && x-data.at(-1).x > .5) data.push({x:x-.001,y:null});
-      data.push({x,y:point.raw_counts-(zeroed ? saved.zero_counts : 0)});
+      data.push({x,y:zeroed ? Math.abs(value-saved.zero_counts) : value});
     }
+    const signal = hasFiltered ? hasRaw ? 'filtered / raw' : 'filtered' : hasRaw ? 'raw' : Number.isFinite(cell?.filtered_counts) ? 'filtered' : 'raw';
+    const quantity = zeroed ? `${signal} magnitude from zero (counts)` : `${signal} counts (zero not set)`;
     const color = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-    const traces = [{label:zeroed ? 'Load cell · change from zero (counts)' : 'Load cell · raw counts (zero not set)',data,
+    const traces = [{label:`Load cell · ${quantity}`,data,
       yAxisID:'ads1115',borderColor:color('--accent'),borderWidth:1.5,pointRadius:0,spanGaps:false}];
     const level = cellThreshold.valueAsNumber;
-    if (zeroed && Number.isFinite(level) && level > 0) for (const sign of [1,-1]) traces.push({
-      label:`${sourceDirty && sourceChanged() ? 'Draft' : 'Contact'} threshold ${sign > 0 ? '+' : '−'}${level} counts`,
-      data:[{x:-30,y:sign*level},{x:0,y:sign*level}],yAxisID:'ads1115',borderColor:color('--warn'),borderWidth:1,borderDash:[5,4],pointRadius:0});
+    if (zeroed && Number.isFinite(level) && level > 0) traces.push({
+      label:`${sourceDirty && sourceChanged() ? 'Draft' : 'Contact'} threshold ${level} counts`,
+      data:[{x:-30,y:level},{x:0,y:level}],yAxisID:'ads1115',borderColor:color('--warn'),borderWidth:1,borderDash:[5,4],pointRadius:0});
     if (!contactChart) contactChart = new Chart(document.getElementById('contact-history'), {
       type:'line',data:{datasets:[]},options:{animation:false,responsive:true,maintainAspectRatio:false,parsing:false,
         plugins:{decimation:{enabled:true,algorithm:'min-max'},legend:{labels:{color:color('--muted')}}},scales:{x:{type:'linear',min:-30,max:0,ticks:{color:color('--muted')},title:{display:true,text:'Time (s)',color:color('--muted')}},
@@ -667,7 +675,7 @@
     contactChart.options.plugins.legend.labels.color = color('--muted');
     contactChart.options.scales.x.ticks.color = color('--muted');
     contactChart.options.scales.x.title.color = color('--muted');
-    contactChart.options.scales.ads1115 = {type:'linear',position:'left',ticks:{color:color('--muted')},title:{display:true,text:zeroed ? 'Change from zero (counts)' : 'Raw counts · zero not set',color:color('--muted')},...bounds};
+    contactChart.options.scales.ads1115 = {type:'linear',position:'left',ticks:{color:color('--muted')},title:{display:true,text:quantity[0].toUpperCase()+quantity.slice(1),color:color('--muted')},...bounds};
     contactChart.data.datasets = traces;
     contactChart.$scrollPixels = 0; contactChart.$renderedAt = performance.now();
     contactChart.update('none');

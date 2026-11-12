@@ -515,13 +515,17 @@ When local odometry is unavailable, **Mark ground** can instead use the current 
 
 Connect the ESP32 to the car by USB and use the same normal hardware launch.
 Open **Setup → Probe contact**, select **ESP32 load cell**, and **Save on car**.
-The existing firmware streams raw readings; no weight calibration or device
-identification setup is needed.
+The controller finds the ESP32 by USB identity and opens its persistent
+`/dev/serial/by-id` link. No weight calibration or device identification setup
+is needed.
 
-With the probe clear, press **Zero**. Watch the graph while pressing/releasing
-the sensor, set **Threshold** in counts, and **Save on car**. Before zeroing the
-graph shows raw counts; afterward it shows change from zero. Contact triggers
-when the magnitude reaches the threshold, records depth and retracts as before.
+Keep the probe clear for 10 continuous seconds, then press **Zero** to save the
+mean of the preceding 10 seconds. Watch the graph while pressing/releasing the
+sensor, set **Threshold** in counts, and **Save on car**. Before zeroing the
+graph shows filtered counts; afterward it shows the absolute change from zero.
+Contact triggers in either direction when that magnitude reaches the threshold,
+records depth and retracts as before. The firmware reads every HX711 conversion
+(hardware RATE setting: 10 or 80 SPS) and applies a 40 ms low-pass filter.
 Missing/stale data stops extension; it never silently switches back to ADC.
 
 Only `source`, `threshold_counts` and `zero_counts` are stored under
@@ -529,3 +533,8 @@ Only `source`, `threshold_counts` and `zero_counts` are stored under
 updates this local file, not a Git commit. Zero survives restarts/reconnects;
 press Zero again if the unloaded reading changes. Close any serial monitor
 before starting the operator so it can open the ESP32 port.
+
+An ESP32 task watchdog restarts stalled firmware after 3 seconds. A disconnected
+HX711 reports errors and periodically retries its interface; no duplicate samples
+are generated to keep the connection looking fresh. The Pi's independent
+0.5-second freshness check remains the immediate stop condition.
