@@ -11,12 +11,12 @@
     "travel_ticks": 6216
   },
   "metal_detector": {
-    "baseline_adc": 127.27697699999999,
-    "full_response_adc": 127.5,
+    "baseline_adc": 125.72030400000001,
+    "full_response_adc": 125.97000000000001,
     "reference_voltage": 5.0
   },
   "schema_version": 1,
-  "revision": 80,
+  "revision": 93,
   "section_revisions": {
     "arm": 77,
     "adc": 33,
@@ -24,12 +24,13 @@
     "cameras": 30,
     "probe_direction": 10,
     "inspection": 17,
-    "metal_detector": 27,
-    "probe_stroke": 76,
+    "metal_detector": 92,
+    "probe_stroke": 93,
     "probe_guidance": 32,
     "probe_contact": 80,
     "probe": 75,
-    "probe_scan": 78
+    "probe_scan": 78,
+    "probe_alignment": 82
   },
   "adc": {
     "config": {
@@ -154,7 +155,7 @@
     "passes": 2
   },
   "probe_stroke": {
-    "down_mm_s": 40.0,
+    "down_mm_s": 100.0,
     "retract_mm_s": 30.0,
     "home_load_percent": 10.0
   },
@@ -172,5 +173,8 @@
   "probe_scan": {
     "point_count": 5,
     "spacing_deg": 10.0
+  },
+  "probe_alignment": {
+    "offset_deg": 40.0
   }
 }
