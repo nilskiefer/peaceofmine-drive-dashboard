@@ -3180,7 +3180,7 @@ function armSweepCalibration() {
 
 function savedArmSweep(saved) {
   const calibrated = armSweepCalibration();
-  if (!calibrated) return null;
+  if (!state.settings || !calibrated) return null;
   if (Number.isFinite(saved?.minimum_deg) && Number.isFinite(saved?.maximum_deg)) return saved;
   const {calibration} = calibrated;
   return {minimum_deg:(calibration.minimum - calibration.center) * 360 / 4096,

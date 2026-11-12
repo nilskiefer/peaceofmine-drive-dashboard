@@ -577,7 +577,7 @@ assert(byIdIn(leftRow,'arm-capture-maximum') && byIdIn(leftRow,'arm-move-maximum
 state.arm_servo.captured = {minimum:2426,center:1415,maximum:367};
 updateArmSettings();
 assert($('arm-recorded-maximum').textContent==='213.2°' && $('arm-recorded-center').textContent==='124.4°' && $('arm-recorded-minimum').textContent==='32.3°', 'legacy reverse captures display in their physical rows');
-assert($('arm-saved-maximum').textContent==='—' && $('arm-move-maximum').disabled && !$('arm-apply-limits').disabled, 'captured limits are savable before Go is available');
+assert($('arm-saved-maximum').textContent==='—' && $('arm-move-maximum').disabled && !$('arm-apply-limits').disabled, 'captured limits are savable with Go controls removed');
 state.arm_servo.calibration={minimum:511,center:1514,maximum:2555};updateArmSettings();
 $('arm-apply-limits').click();
 const calibrationSave=sent.at(-1);
@@ -587,7 +587,7 @@ state.arm_servo.last_command={request_id:calibrationSave.request_id,success:fals
 updateArmSettings();
 assert($('arm-servo-status').textContent.includes('Connected') && !$('arm-servo-status').textContent.includes('Rejected') && $('arm-feedback').textContent===state.arm_servo.reason,'command rejection is distinct from live motor connectivity');
 updateArmSettings();
-assert($('arm-recorded-maximum').textContent==='213.2°' && $('arm-saved-maximum').textContent==='224.6°' && $('arm-move-maximum').title.includes('224.6°'), 'Go identifies the applied position even when a different capture is pending');
+assert($('arm-recorded-maximum').textContent==='213.2°' && $('arm-saved-maximum').textContent==='224.6°' && $('arm-move-maximum').hidden && $('arm-move-maximum').disabled, 'saved position remains separate from captured position with Go removed');
 $('arm-capture-maximum').click();
 assert(sent.at(-1).point==='minimum','old backend keeps using the legacy left capture slot until the pair is cleared');
 state.arm_servo.captured[sent.at(-1).point]=2430;state.arm_servo.last_command={request_id:sent.at(-1).request_id,success:true,message:'Position captured'};updateArmSettings();
@@ -596,8 +596,9 @@ $('arm-capture-minimum').click();assert(sent.at(-1).point==='maximum','legacy ri
 state.arm_servo.captured={};updateArmSettings();
 for(const point of ['maximum','center','minimum']) {
   updateArmSettings();$('arm-capture-'+point).click();assert(sent.at(-1).action==='capture' && sent.at(-1).point===point,'capture sends the correct encoder point');
-  $('arm-move-'+point).onkeydown({key:' ',repeat:false,preventDefault(){}});
-  assert(sent.at(-1).action==='move' && sent.at(-1).point===point && sent.at(-1).held,'Go holds the matching applied point');$('arm-move-'+point).onkeyup({key:' '});
+  const beforeHiddenGo=sent.length;
+  $('arm-move-'+point).click();
+  assert($('arm-move-'+point).hidden && $('arm-move-'+point).disabled && !$('arm-move-'+point).onkeydown && sent.length===beforeHiddenGo,'removed Go controls cannot start motion');
 }
 state.arm_servo.captured={minimum:367,center:2600,maximum:2426};updateArmSettings();const beforeBadLimits=sent.length;$('arm-apply-limits').click();
 assert(sent.length===beforeBadLimits && $('arm-apply-limits').disabled && $('arm-limits-validation').textContent.includes('Centre must be between') && $('arm-recorded-center').textContent==='228.5°', 'out-of-range centre is explained and never sorted into an endpoint');

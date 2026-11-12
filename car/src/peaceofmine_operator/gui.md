@@ -199,8 +199,20 @@ HTTPS for a remote laptop as above.
 
 Settings has separate Arm (default ID 1) and Probe (default ID 2) panels on the
 shared ArbotiX. Switching requires stopped motion. Reconnect while stopped to
-rescan after connecting a missing servo. Arm sweep calibration retains its
-three points, saved with **Save recorded limits** in `operator_config.json`.
+rescan after connecting a missing servo. The arm's physical range has three
+recorded points: Left, Centre and Right. Move the arm, release its motor, press
+**Record** for each position, then **Save limits**. The table only records and
+saves; the separate position slider remains available for moving the arm.
+
+**Detector sweep range** is independent of those physical limits. Set or record
+its Right and Left limits, then **Save on car**. These angles are relative to the
+recorded arm centre (0°), and apply to both search sweeping and Confirm arc.
+They must remain inside the physical arm range. The shared `arm_sweep` section
+stores `minimum_deg` and `maximum_deg`; absent/null endpoints preserve the full
+range until saved. Changing the range stops ongoing arm movement/inspection.
+The full physical range still controls positioning and probe reach, including
+the entire range used by a Manual probe scan. Sweep settings never overwrite
+physical calibration.
 
 To set **maximum depth**, hold **Home** to retract to the top, then hold
 **Down** to the deepest safe position and release. Choose **Save current
