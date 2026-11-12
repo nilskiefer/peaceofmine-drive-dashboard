@@ -16,7 +16,7 @@
     "reference_voltage": 5.0
   },
   "schema_version": 1,
-  "revision": 99,
+  "revision": 103,
   "section_revisions": {
     "arm": 77,
     "adc": 33,
@@ -25,9 +25,9 @@
     "probe_direction": 10,
     "inspection": 17,
     "metal_detector": 92,
-    "probe_stroke": 96,
+    "probe_stroke": 103,
     "probe_guidance": 32,
-    "probe_contact": 99,
+    "probe_contact": 102,
     "probe": 75,
     "probe_scan": 78,
     "probe_alignment": 82
@@ -155,10 +155,11 @@
     "passes": 2
   },
   "probe_stroke": {
-    "down_mm_s": 25.0,
+    "down_mm_s": 40.0,
     "retract_mm_s": 70.0,
     "retract_slow_mm_s": 10.0,
-    "home_load_percent": 10.0
+    "home_load_percent": 10.0,
+    "contact_slowdown_factor": 20.0
   },
   "probe_guidance": {
     "pivot_x_m": 0.3,
@@ -168,7 +169,7 @@
   },
   "probe_contact": {
     "source": "esp32",
-    "threshold_counts": 1500000,
+    "threshold_counts": 1700000,
     "zero_counts": -1255504.2519607844
   },
   "probe_scan": {
