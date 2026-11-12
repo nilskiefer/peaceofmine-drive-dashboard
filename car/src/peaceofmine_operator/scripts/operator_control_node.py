@@ -20,7 +20,7 @@ from std_msgs.msg import Bool, Float32, String
 from peaceofmine_operator import marking_settings
 from peaceofmine_operator.rc_safety import RcSafety
 from peaceofmine_operator.transport_clock import transport_age
-from peaceofmine_operator import driving_settings, inspection, probe_alignment, probe_scan
+from peaceofmine_operator import driving_settings, inspection, probe_alignment, probe_scan, probe_guidance
 from peaceofmine_operator.detector import DetectorTelemetry
 from peaceofmine_operator.inspection import InspectionWorkflow
 from peaceofmine_interfaces.action import ActuatorOperation
@@ -124,6 +124,11 @@ class OperatorControl(Node):
         self._probe_fault = False
         self._pose = {'x': 0.0, 'y': 0.0, 'yaw': 0.0}
         self._pose_at = 0.0
+        self._guidance_geometry = None
+        self._guidance_target = None
+        self._guidance_session = uuid.uuid4().hex
+        self._guidance_odom = None
+        self._guidance_after = 0.
         self._speed = 0.0
         self._motion_speed = math.inf
         self._odometry_at = 0.0
@@ -139,6 +144,8 @@ class OperatorControl(Node):
         self._pump_output = 0.
         self._marking = None
         self._last_shot_request = None
+        self._mark_job = None
+        self._mark_message = ''
         self._mark_pub = self.create_publisher(String, 'field/mark', 10)
         self._pump_pub = self.create_publisher(Float32, 'actuation/pump_percent', 1)
         self.create_subscription(String, 'operator/settings', self._marking_settings_cb, 10)
@@ -170,6 +177,7 @@ class OperatorControl(Node):
     def _mission_settings_cb(self, msg):
         try:
             settings = json.loads(msg.data)
+            self._guidance_geometry = probe_guidance.validate(settings.get('probe_guidance'))
             self._confirmation_passes = inspection.validate(settings.get('inspection', inspection.DEFAULTS))['passes']
             alignment = settings.get('probe_alignment', probe_alignment.DEFAULTS)
             self._inspection.probe_offset = probe_alignment.validate(alignment)['offset_deg']
@@ -394,6 +402,12 @@ class OperatorControl(Node):
         with self._lock:
             updated = self._rc_safety.update_rc(message)
             safety = self._enforce_safety_locked()
+            if updated:
+                controls = self._rc_controls()
+                if controls.get('fresh') and (controls.get('steering') or controls.get('throttle')):
+                    self._inspection.stop('Vehicle moved; confirm the target again.')
+                    if self._mark_job is not None:
+                        self._stop_pump(0., 'Mark cancelled: RC driving input.')
             if updated and self._drive_input == 'rc':
                 controls = self._rc_controls()
                 if (self._armed and safety['allowed'] and controls['fresh'] and not self._calibrating
@@ -443,19 +457,194 @@ class OperatorControl(Node):
         self._pump_output = percent
         self._pump_pub.publish(Float32(data=percent))
 
-    def _stop_pump(self, idle):
+    def _stop_pump(self, idle, reason='Mark cancelled.'):
+        job = self._mark_job
+        if job is not None and self._pump_mode in ('aiming', 'settling'):
+            self._inspection_cancel()
+            self._mark_message = reason
+            self._result_pub.publish(String(data=json.dumps(dict(type='error', command_type='pump_mark',
+                client_id=job['client'], request_id=job['request'], message=reason))))
+        self._mark_job = None
         self._pump_active = False
         self._pump_mode = 'idle'
         self._pump_until = 0.
         if self._pump_output != idle:
             self._publish_pump(idle)
 
+    def _mark_motion_block(self, now):
+        # Relative aiming uses the same RC/motion fence as Confirm arc. Missing
+        # odometry must never be manufactured into a stationary world pose.
+        if now-self._odometry_at < .5 and self._motion_speed > self._probe_speed_limit:
+            return 'Stop the vehicle before marking.'
+        if self._deadman and self._command != (0., 0.):
+            return 'Release the driving controls before marking.'
+        if not self._rc_safety.simulation:
+            controls = self._rc_controls()
+            if not controls.get('fresh'):
+                return 'Wait for fresh RC controls before marking.'
+            if controls.get('steering') or controls.get('throttle'):
+                return 'Centre the RC sticks before marking.'
+        return ''
+
+    def _relative_mark_guide(self, now, bearing):
+        arm, geometry = self._arm_state, self._guidance_geometry
+        if geometry is None:
+            return dict(available=False, reachable=False, reason='Save probe geometry in Setup before marking.')
+        calibration = arm.get('calibration')
+        if now-self._arm_state_at >= .5 or not arm.get('connected') or not calibration:
+            return dict(available=False, reachable=False, reason='Connect and calibrate the arm in Setup.')
+        offset = float(self.get_parameter('fixture_angle_offset_deg').value)
+        lower = (calibration['minimum']-calibration['center'])*360/4096+offset
+        upper = (calibration['maximum']-calibration['center'])*360/4096+offset
+        angle = (arm['position']-calibration['center'])*360/4096+offset
+        origin = dict(x=0., y=0., yaw=0.)
+        target = probe_guidance.metal_point(origin, bearing, geometry)
+        guide = probe_guidance.guidance(origin, angle, self._inspection.probe_offset, geometry, target, lower, upper)
+        if not lower <= guide['angle_deg'] <= upper:
+            guide['reason'] = (f"Nozzle needs {guide['angle_deg']:.1f}°; arm range is {lower:.1f}° to {upper:.1f}°. "
+                               'Reposition the car and confirm again.')
+        elif not guide['reachable']:
+            guide['reason'] = 'Coil and nozzle radii do not match within 5 cm. Local odometry is required for repositioning guidance.'
+        return guide
+
+    def _mark_job_guide(self, now, job):
+        if job['source'] == 'confirmed_bearing':
+            return self._relative_mark_guide(now, job['bearing'])
+        return self._probe_guidance_state(now)
+
     def _pump_tick(self, now, safety):
         allowed = self._pump_allowed(safety)
         idle = self._marking['idle_percent'] if allowed else 0.
+        job = self._mark_job
+        if job is not None:
+            if self._guidance_geometry != job['geometry'] or self._inspection.probe_offset != job['offset']:
+                self._stop_pump(0., 'Mark cancelled: mounting settings changed.')
+                return
+            relative = job['source'] == 'confirmed_bearing'
+            if self._mark_motion_block(now):
+                self._stop_pump(0., 'Mark cancelled: '+self._mark_motion_block(now))
+                return
+            if relative and (self._inspection.generation != job['confirmation_generation']
+                             or self._inspection.confirmed_angle != job['bearing']):
+                self._stop_pump(0., 'Mark cancelled: confirmation changed. Confirm arc again.')
+                return
+            origin = job['pose']
+            yaw_delta = math.atan2(math.sin(self._pose['yaw']-origin['yaw']), math.cos(self._pose['yaw']-origin['yaw']))
+            if not relative and (math.hypot(self._pose['x']-origin['x'], self._pose['y']-origin['y']) > .05 or abs(yaw_delta) > math.radians(2)):
+                self._stop_pump(0., 'Mark cancelled: vehicle moved.')
+                return
+            if not allowed or (not relative and (not self._stationary() or self._guidance_session != job['session'])):
+                self._stop_pump(0., 'Mark cancelled: vehicle moved or control/odometry was lost.')
+                return
+            if ((not relative and (self._pose_at <= 0 or now-self._pose_at >= .5))
+                    or now-self._arm_state_at >= .5 or not self._arm_state.get('connected')):
+                self._stop_pump(0., 'Mark cancelled: arm telemetry or odometry was lost.')
+                return
+            if self._pump_mode in ('aiming', 'settling'):
+                if now >= job['deadline']:
+                    self._stop_pump(0., 'Arm did not settle on the mark before the timeout.')
+                    return
+                if self._pump_mode == 'aiming' and job.get('waiting_idle'):
+                    arm = self._arm_state
+                    if (self._arm_state_at > job['stopped_at'] and not arm.get('torque')
+                            and arm.get('lifecycle') == 'IDLE' and not arm.get('sweeping')):
+                        guide = self._mark_job_guide(now, job)
+                        if not guide.get('reachable'):
+                            self._stop_pump(0., guide.get('reason') or 'Target is no longer reachable.')
+                            return
+                        job['waiting_idle'] = False
+                        self._execute_mark(job, guide['angle_deg'])
+                if self._pump_mode == 'settling':
+                    guide = self._mark_job_guide(now, job)
+                    settled = (guide.get('reachable') and guide.get('distance_m', math.inf) <= .05+1e-12
+                               and not self._arm_state.get('torque') and self._arm_state.get('lifecycle') == 'IDLE')
+                    if settled:
+                        if job.get('settled_at') is None:
+                            job['settled_at'] = now
+                        if now-job['settled_at'] >= .2:
+                            self._fire_mark(job, now)
+                    else:
+                        job['settled_at'] = None
+                # Pump is off throughout arm positioning, including any configured idle output.
+                if self._pump_mode in ('aiming', 'settling'):
+                    self._publish_pump(0.)
+                return
         if self._pump_active and (not allowed or now >= self._pump_until):
             self._stop_pump(idle)
         self._publish_pump(self._pump_output if self._pump_active else idle)
+
+    def _start_mark(self, payload, now):
+        blocked = self._mark_motion_block(now)
+        if blocked:
+            return dict(type='error', message=blocked)
+        world_ready = self._stationary() and self._pose_at > 0 and now-self._pose_at < .5
+        ground = self._mark_ground_point(now) if world_ready else {}
+        if ground:
+            self._guidance_target = dict(id=uuid.uuid4().hex, x=ground['metal_x'], y=ground['metal_y'], **ground)
+        guide = self._probe_guidance_state(now) if world_ready and self._guidance_target else None
+        source, bearing = 'world_point', None
+        if guide is None:
+            bearing = self._inspection.confirmed_angle
+            if not probe_guidance.finite(bearing):
+                return dict(type='error', message='Confirm arc before marking. Local odometry is unavailable; a confirmed bearing is required.')
+            guide = self._relative_mark_guide(now, bearing)
+            source = 'confirmed_bearing'
+        if not guide.get('available') or not guide.get('reachable'):
+            return dict(type='error', message=guide.get('reason') or 'No reachable marked target. Sweep to detect metal first.')
+        if not self._inspection_clients['arm'].server_is_ready():
+            return dict(type='error', message='Arm action server unavailable.')
+        target = dict(self._guidance_target) if source == 'world_point' else dict(fixture_angle_deg=bearing)
+        request = payload.get('request_id')
+        request = request if isinstance(request, str) and len(request) <= 100 else None
+        self._pump_active, self._pump_mode = True, 'aiming'
+        self._mark_message = 'Aiming nozzle at the metal point.'
+        self._publish_pump(0.)
+        job = dict(client=self._lease, request=request, target=target, session=self._guidance_session,
+                   deadline=now+60., settings=dict(self._marking), reading=self._log_detector_reading(),
+                   geometry=dict(self._guidance_geometry), offset=self._inspection.probe_offset, pose=dict(self._pose),
+                   source=source, bearing=bearing, confirmation_generation=self._inspection.generation)
+        self._mark_job = job
+        arm = self._arm_state
+        if arm.get('torque') or arm.get('sweeping') or arm.get('lifecycle') != 'IDLE':
+            job.update(waiting_idle=True, stopped_at=now)
+            self._arm_command_pub.publish(command_message(dict(action='stop')))
+        else:
+            self._execute_mark(job, guide['angle_deg'])
+        return None
+
+    def _execute_mark(self, job, angle):
+        def complete(result):
+            if self._mark_job is not job:
+                return
+            if not result.get('success'):
+                self._stop_pump(0., result.get('message') or 'Arm failed to reach the mark.')
+                return
+            self._pump_mode = 'settling'
+            self._mark_message = 'Waiting for the nozzle to settle.'
+            job['deadline'] = min(job['deadline'], time.monotonic()+2.)
+
+        try:
+            self._inspection_execute('arm', 'angle', angle, 0., complete)
+        except Exception as exc:
+            self._stop_pump(0., 'Could not aim the marking nozzle: '+str(exc))
+        return None
+
+    def _fire_mark(self, job, now):
+        settings, target = job['settings'], job['target']
+        self._pump_mode, self._pump_until = 'shot', now+settings['duration_s']
+        self._mark_message = 'Nozzle positioned; spray commanded.'
+        self._last_shot_request = job['request']
+        self._publish_pump(settings['active_percent'])
+        ground = {k: target[k] for k in ('metal_x', 'metal_y', 'fixture_angle_deg', 'peak_pose', 'guidance_session') if k in target}
+        # Repeated shots are separate events, while keeping the same world target.
+        ident = uuid.uuid4().hex
+        pose = self._pose if self._pose_at > 0 and now-self._pose_at < .5 else None
+        mark = dict(id=ident, timestamp=time.time(), x=pose['x'] if pose else None, y=pose['y'] if pose else None,
+                    heading_deg=math.degrees(pose['yaw']) if pose else None, **job['reading'], **ground, mark_source=job['source'],
+                    duration_s=settings['duration_s'], active_percent=settings['active_percent'], idle_percent=settings['idle_percent'])
+        if job['source'] == 'world_point':
+            self._guidance_target = dict(target, id=ident)
+        self._mark_pub.publish(String(data=json.dumps(mark, allow_nan=False)))
 
     def _pump_command(self, payload, safety):
         manual = payload['type'] == 'pump_manual'
@@ -481,28 +670,18 @@ class OperatorControl(Node):
             return dict(type='error', message='Unknown manual pump command.')
         if self._pump_active:
             return dict(type='error', message='Pump mark cycle already in progress.')
+        if not manual:
+            return self._start_mark(payload, now)
         if manual:
             try:
                 output = marking_settings.percent(payload.get('percent'))
             except ValueError as exc:
                 return dict(type='error', message=str(exc))
             duration = .25
-        else:
-            duration = self._marking['duration_s']
-            output = self._marking['active_percent']
         self._pump_active = True
-        self._pump_mode = 'manual' if manual else 'shot'
+        self._pump_mode = 'manual'
         self._pump_until = now + duration
         self._publish_pump(output)
-        if not manual:
-            request = payload.get('request_id')
-            self._last_shot_request = request if isinstance(request, str) and len(request) <= 100 else None
-            pose = self._pose if self._pose_at and now - self._pose_at < .5 else {}
-            self._mark_pub.publish(String(data=json.dumps(dict(
-                x=pose.get('x'), y=pose.get('y'), heading_deg=math.degrees(pose['yaw']) if pose else None,
-                **self._log_detector_reading(),
-                id=uuid.uuid4().hex, timestamp=time.time(), duration_s=duration,
-                active_percent=output, idle_percent=self._marking['idle_percent']))))
 
     def begin_shutdown(self):
         """Revoke control before closing transports or invalidating ROS publishers."""
@@ -533,7 +712,53 @@ class OperatorControl(Node):
 
     ## ROS callbacks ##
 
+    def _mark_ground_point(self, now):
+        reading = self._inspection_detector
+        peak = reading.get('latest_peak') or {}
+        geometry = self._guidance_geometry
+        if (geometry is None or now-self._inspection_detector_at >= .5 or not reading.get('fresh')
+                or not probe_guidance.finite(peak.get('timestamp')) or peak['timestamp'] < self._guidance_after
+                or peak.get('fresh') is not True or not probe_guidance.valid_pose(peak.get('pose'))
+                or not probe_guidance.finite(peak.get('angle_deg'))
+                or self._pose_at <= 0 or now-self._pose_at >= .5):
+            return {}
+        origin = peak['pose']
+        yaw_delta = math.atan2(math.sin(origin['yaw']-self._pose['yaw']), math.cos(origin['yaw']-self._pose['yaw']))
+        if math.hypot(origin['x']-self._pose['x'], origin['y']-self._pose['y']) > .05 or abs(yaw_delta) > math.radians(2):
+            return {}
+        point = probe_guidance.metal_point(origin, peak['angle_deg'], geometry)
+        return dict(metal_x=point['x'], metal_y=point['y'], fixture_angle_deg=peak['angle_deg'],
+                    peak_pose=dict(origin), guidance_session=self._guidance_session)
+
+    def _probe_guidance_state(self, now):
+        def unavailable(reason):
+            return dict(available=False, reachable=False, reason=reason)
+        if self._guidance_geometry is None:
+            return unavailable('Save the pivot and coil/probe radii in Setup.')
+        if self._guidance_target is None:
+            return unavailable('Sweep to detect metal, then mark the ground.')
+        if self._pose_at <= 0 or now-self._pose_at >= .5:
+            return unavailable('Waiting for fresh odometry.')
+        arm = self._arm_state
+        calibration = arm.get('calibration')
+        if now-self._arm_state_at >= .5 or not arm.get('connected') or not calibration:
+            return unavailable('Connect and calibrate the arm in Setup.')
+        offset = float(self.get_parameter('fixture_angle_offset_deg').value)
+        lower = (calibration['minimum']-calibration['center'])*360/4096+offset
+        upper = (calibration['maximum']-calibration['center'])*360/4096+offset
+        angle = (arm['position']-calibration['center'])*360/4096+offset
+        return probe_guidance.guidance(self._pose, angle, self._inspection.probe_offset,
+                                       self._guidance_geometry, self._guidance_target, lower, upper)
+
     def _odometry_cb(self, message: Odometry) -> None:
+        stamp = message.header.stamp.sec + message.header.stamp.nanosec/1e9
+        frame = message.header.frame_id
+        previous = self._guidance_odom
+        if previous and (frame != previous[0] or stamp < previous[1]):
+            self._guidance_target = None
+            self._guidance_session = uuid.uuid4().hex
+            self._guidance_after = time.monotonic()
+        self._guidance_odom = (frame, stamp)
         quaternion = message.pose.pose.orientation
         yaw = math.atan2(2.0 * (quaternion.w * quaternion.z + quaternion.x * quaternion.y),
                          1.0 - 2.0 * (quaternion.y ** 2 + quaternion.z ** 2))
@@ -555,6 +780,8 @@ class OperatorControl(Node):
             if self._inspection.confirmed_angle is not None and self._motion_speed > self._probe_speed_limit:
                 self._inspection.stop('Vehicle moved; confirm the target again.')
             self._speed = twist.linear.x if math.isfinite(twist.linear.x) else None
+            if self._mark_job is not None and self._motion_speed > self._probe_speed_limit:
+                self._stop_pump(0., 'Mark cancelled: vehicle moved.')
             self._odometry_at = time.monotonic()
 
     def _stationary(self):
@@ -639,6 +866,8 @@ class OperatorControl(Node):
             max(-self._max_yaw_rate, min(self._max_yaw_rate, self._finite(angular))),
         )
         if deadman and self._command != (0., 0.):
+            if self._mark_job is not None:
+                self._stop_pump(0., 'Mark cancelled: vehicle moved.')
             self._inspection.stop('Vehicle moved. Confirm the target again before probing.')
         self._last_command = time.monotonic()
 
@@ -793,9 +1022,11 @@ class OperatorControl(Node):
                 },
                 'pump_active': self._pump_active,
                 'marking': dict(settings=self._marking, mode=self._pump_mode,
-                                output_percent=self._pump_output, last_shot_request=self._last_shot_request),
+                                output_percent=self._pump_output, last_shot_request=self._last_shot_request,
+                                active_request=self._mark_job['request'] if self._mark_job else None, message=self._mark_message),
                 'inspection': inspection,
                 'search_alert': dict(self._search_alert, server_time=time.time()),
+                'probe_guidance': self._probe_guidance_state(now),
                 'robot': {**self._pose, 'speed_mps': self._speed, 'stationary': self._stationary(),
                           'odometry_fresh': now - self._odometry_at < .5,
                           'pose_fresh': self._pose_at > 0 and now - self._pose_at < .5},
@@ -853,6 +1084,9 @@ class OperatorControl(Node):
                     return {'type':'error', 'message':'Fresh localization is required to log a pose.'}
                 self._log_field_event('POSE LOGGED')
             elif message_type == 'clear_log':
+                if self._mark_job is not None:
+                    self._stop_pump(0., 'Mark cancelled: mission log cleared.')
+                self._guidance_target = None
                 self._field_clear.publish(Bool(data=True))
             elif message_type == 'inspection' and payload.get('action') == 'stop':
                 if self._inspection.active:
@@ -866,7 +1100,9 @@ class OperatorControl(Node):
                 self._calibrating = message_type == 'calibration_begin'
                 flush_drive = True
             elif message_type in ('adc', 'settings'):
-                next_scan_setting = message_type == 'settings' and payload.get('section') in ('inspection', 'probe_alignment', 'probe_scan', 'probe_stroke')
+                if self._mark_job is not None:
+                    self._stop_pump(0., 'Mark cancelled: settings changed.')
+                next_scan_setting = message_type == 'settings' and payload.get('section') in ('inspection', 'probe_alignment', 'probe_scan', 'probe_stroke', 'probe_guidance')
                 if self._inspection.active and not next_scan_setting:
                     self._stop_motion_locked()
                 publisher = self._adc_command_pub if message_type == 'adc' else self._settings_command_pub
@@ -882,7 +1118,7 @@ class OperatorControl(Node):
                 self._detector_command_pub.publish(String(data=json.dumps(command)))
             elif message_type == 'arm_servo' and payload.get('action') in ('select', 'select_role', 'reconnect', 'capture', 'configure', 'configure_motion', 'configure_direction', 'enable_multiturn', 'save_probe_extension', 'stop', 'home_release'):
                 command = {key: payload[key] for key in ('action', 'request_id', 'hold_id', 'servo_id', 'role', 'point', 'minimum', 'center', 'maximum', 'max_speed_deg_s', 'acceleration_deg_s2', 'max_extension_mm', 'enabled') if key in payload}
-                if self._inspection.active:
+                if self._inspection.active or self._mark_job is not None:
                     self._stop_motion_locked()
                 return self._actuator_command(command)
             elif message_type == 'arm_servo' and payload.get('role') == 'probe' and payload.get('action') == 'home_release':
@@ -1004,7 +1240,13 @@ class OperatorControl(Node):
                         return {'type': 'error', 'message': 'Select a connected arm servo in Setup first.'}
                     if not self._arm_state.get('calibration'):
                         return {'type': 'error', 'message': 'Record and apply arm limits in Setup before positioning arm.'}
-                if 'target_bearing_deg' in payload:
+                if 'stored_target_id' in payload:
+                    guide = self._probe_guidance_state(time.monotonic())
+                    if (not guide.get('available') or not guide.get('reachable')
+                            or guide.get('target', {}).get('id') != payload['stored_target_id']):
+                        return {'type': 'error', 'message': guide.get('reason') or 'Stored target changed; check guidance.'}
+                    angle = guide['angle_deg']
+                elif 'target_bearing_deg' in payload:
                     bearing = payload['target_bearing_deg']
                     if type(bearing) not in (float, int) or not math.isfinite(bearing):
                         return {'type': 'error', 'message': 'Target bearing must be finite'}
@@ -1032,7 +1274,9 @@ class OperatorControl(Node):
             return ('probe',)
         if kind in ('align_probe', 'sweep_enabled', 'sweep_speed'):
             return ('arm',)
-        if kind in ('pump_manual', 'pump_mark'):
+        if kind == 'pump_mark':
+            return ('arm', 'pump')
+        if kind == 'pump_manual':
             return ('pump',)
         if kind in ('calibration_begin', 'calibration_end'):
             return ('arm', 'probe', 'inspection', 'pump')

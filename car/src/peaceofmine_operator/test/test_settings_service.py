@@ -11,6 +11,28 @@ from test_arm_node import module
 
 
 class SettingsServiceTest(unittest.TestCase):
+    def test_guidance_requires_measurements_and_survives_settings_restart(self):
+        rclpy.init()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / 'operator_config.json')
+            options = [Parameter('config_file', value=path)]
+            node_type = module('operator_settings_node').OperatorSettings
+            node = node_type(parameter_overrides=options)
+            try:
+                self.assertIsNone(node.shared['probe_guidance'])
+                valid = dict(pivot_x_m=.2, pivot_y_m=-.1, coil_radius_m=.5, probe_radius_m=.6)
+                request = dict(request_id='geometry', section='probe_guidance', value=valid)
+                node.command(String(data=json.dumps(request)))
+                self.assertEqual(configuration.load(path)['probe_guidance'], valid)
+                node.command(String(data=json.dumps(dict(request, value=dict(valid, coil_radius_m=0)))))
+                self.assertEqual(configuration.load(path)['probe_guidance'], valid)
+                node.destroy_node()
+                node = node_type(parameter_overrides=options)
+                self.assertEqual(node.shared['probe_guidance'], valid)
+            finally:
+                node.destroy_node()
+                rclpy.shutdown()
+
     def test_dashboard_drive_settings_survive_node_restart(self):
         rclpy.init()
         with tempfile.TemporaryDirectory() as tmp:

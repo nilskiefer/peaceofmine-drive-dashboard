@@ -15,7 +15,7 @@
   const capture = {device:'auto', width:640, height:480, framerate:30, pixel_format:'mjpeg2rgb'};
   mock.settings = {
     gnss: {max_wait_s: 5, target_accuracy_m: 1},
-    inspection:{passes:2}, probe_alignment:{offset_deg:30}, probe_scan:{point_count:7,spacing_deg:10},
+    probe_guidance:null, inspection:{passes:2}, probe_alignment:{offset_deg:30}, probe_scan:{point_count:7,spacing_deg:10},
     probe_stroke:{down_mm_s:5,retract_mm_s:5,home_load_percent:10},
     marking:{duration_s:2, idle_percent:0, active_percent:100, manual_percent:0},
     saved:true, driving:{input:'controller',forward_percent:100,reverse_percent:100},
@@ -31,12 +31,68 @@
       x:mock.pose.x, y:mock.pose.y, heading_deg:mock.pose.yaw*180/Math.PI,
       detector_volts:adcFiltered.get(mux) ?? null, ...event});
   }
+  function geometryPoint(angle, radius, p = mock.pose) {
+    const g = mock.settings.probe_guidance, a = angle * Math.PI / 180;
+    const x = g.pivot_x_m + radius * Math.cos(a), y = g.pivot_y_m + radius * Math.sin(a);
+    return {x:p.x + Math.cos(p.yaw)*x - Math.sin(p.yaw)*y, y:p.y + Math.sin(p.yaw)*x + Math.cos(p.yaw)*y};
+  }
+  function guidance() {
+    const g = mock.settings.probe_guidance;
+    if (!g) return {available:false,reason:'Save probe geometry in Setup → Arm.'};
+    if (!mock.markTarget) return {available:false,reason:'Mark a fresh detection to guide the probe.'};
+    const target = mock.markTarget, tip = geometryPoint(mock.armAngle + mock.settings.probe_alignment.offset_deg, g.probe_radius_m);
+    const dx = target.x-tip.x, dy = target.y-tip.y, yaw = mock.pose.yaw;
+    const pivot = geometryPoint(0, 0), tx = target.x-pivot.x, ty = target.y-pivot.y;
+    const radial = Math.hypot(tx,ty)-g.probe_radius_m;
+    const bearing = Math.atan2(ty,tx)-yaw-mock.settings.probe_alignment.offset_deg*Math.PI/180;
+    const angle = Math.atan2(Math.sin(bearing),Math.cos(bearing))*180/Math.PI;
+    const reachable = Math.abs(radial) <= .05 && angle >= -45 && angle <= 45;
+    return {available:true,target,tip,distance_m:Math.hypot(dx,dy),forward_m:Math.cos(yaw)*dx+Math.sin(yaw)*dy,
+      left_m:-Math.sin(yaw)*dx+Math.cos(yaw)*dy,radial_error_m:radial,angle_deg:angle,reachable,
+      reason:reachable ? '' : 'Drive the marked point onto the probe arc and inside the arm range.'};
+  }
   let logSequence = 0;
-  const pump = {mode:'idle', until:0, output:0, lastRequest:null};
+  const pump = {mode:'idle', until:0, output:0, lastRequest:null, activeRequest:null, message:''};
   function stopPump() {
     pump.mode = 'idle';
     pump.until = 0;
+    pump.activeRequest = null;
+    pump.message = '';
     pump.output = mock.owner && mock.armed ? mock.settings.marking.idle_percent : 0;
+  }
+
+  function cancelMark(reason) {
+    if (!pump.activeRequest) return;
+    const request = pump.activeRequest;
+    stopPump();
+    pump.message = reason;
+    pump.socket?.emit({type:'error',command_type:'pump_mark',request_id:request,message:reason});
+  }
+  function stepPump() {
+    const now = performance.now();
+    if (!mock.owner || !mock.armed) {
+      cancelMark('Mark cancelled: control or arming lost.');
+      stopPump();
+      return;
+    }
+    if (pump.activeRequest && (mock.linear || mock.angular)) { cancelMark('Vehicle moved; mark cancelled.'); return; }
+    if (pump.activeRequest && ['aiming','settling'].includes(pump.mode)) {
+      const guide = guidance();
+      if (!guide.reachable) { cancelMark('Target moved outside probe reach; mark cancelled.'); return; }
+    }
+    if (pump.mode === 'aiming' && now >= pump.until) {
+      mock.armAngle = pump.angle;
+      Object.assign(pump,{mode:'settling',until:now+350,message:'Waiting for probe nozzle to settle.'});
+    } else if (pump.mode === 'settling' && now >= pump.until) {
+      const settings = mock.settings.marking, fix = mock.fieldFix(), event = pump.event;
+      const within = fix && Number.isFinite(fix.horizontal_accuracy_m) && fix.horizontal_accuracy_m <= mock.settings.gnss.target_accuracy_m;
+      Object.assign(pump,{mode:'shot',output:settings.active_percent,until:now+settings.duration_s*1000,
+        lastRequest:pump.activeRequest,message:'Spraying the marked ground point.'});
+      previewLog({...event,timestamp:Date.now()/1000,kind:'pump_mark',status:'SHOT COMMANDED',statusType:'marked',
+        ...settings,...fix,x:mock.pose.x,y:mock.pose.y,heading_deg:mock.pose.yaw*180/Math.PI,
+        gps_status:within ? 'within_target' : fix ? 'uncertain' : 'unavailable'});
+    } else if (['shot','manual'].includes(pump.mode) && now >= pump.until) stopPump();
+    else if (pump.mode === 'idle') stopPump();
   }
 
   // The preview compresses confirmation passes to two seconds each.
@@ -93,6 +149,17 @@
     }
   }
 
+  function latestPeak(t) {
+    const peak = mock.latestPeak;
+    if (!peak) return null;
+    const deltaYaw = mock.pose.yaw-peak.pose.yaw;
+    if (Math.hypot(mock.pose.x-peak.pose.x,mock.pose.y-peak.pose.y) > .05 ||
+        Math.abs(Math.atan2(Math.sin(deltaYaw),Math.cos(deltaYaw))) > 2*Math.PI/180) {
+      mock.latestPeak = null;
+      return null;
+    }
+    return {...peak,fresh:t-peak.timestamp <= 30};
+  }
   function detectorVoltage(t) {
     const angle = mock.sweep ? 40 * Math.sin(t * 1.2) : mock.armAngle;
     const nearTarget = Math.exp(-((mock.pose.x - 8) ** 2) / 2);
@@ -111,9 +178,15 @@
     mock.pose.yaw += mock.angular * dt;
     mock.pose.x += mock.linear * Math.cos(mock.pose.yaw) * dt;
     mock.pose.y += mock.linear * Math.sin(mock.pose.yaw) * dt;
-    const ratio = Math.max(0, Math.min(1, (filtered - 40) / 120));
+    const strength = Math.max(0, (filtered - 40) / 120);
+    const ratio = Math.min(1, strength);
+    const previousPeak = latestPeak(t);
+    if (ratio >= 1 && (!previousPeak || !previousPeak.fresh || strength > previousPeak.signal)) {
+      mock.latestPeak = {angle_deg:angle,signal:strength,timestamp:t,pose:{...mock.pose}};
+    }
+    mock.detectorAt = t;
     stepInspection(t);
-    if (!mock.owner || pump.mode === 'idle' || performance.now() >= pump.until) stopPump();
+    stepPump();
     const load = 100 * (mock.cycle ? 0.08 + mock.depth / 150 + 0.02 * Math.random() : 0.05 + 0.01 * Math.random());
     probeHistory.push({at:t, load, depth_mm:mock.homed ? mock.depth : null});
     while (probeHistory.length && t - probeHistory[0].at > 30) probeHistory.shift();
@@ -121,7 +194,8 @@
     if (includeProbeHistory) lastProbeHistoryAt = t;
     return {
       type: 'state',
-      marking:{settings:{...mock.settings.marking},mode:pump.mode,output_percent:pump.output,last_shot_request:pump.lastRequest},
+      probe_guidance:guidance(),
+      marking:{settings:{...mock.settings.marking},mode:pump.mode,output_percent:pump.output,last_shot_request:pump.lastRequest,active_request:pump.activeRequest,message:pump.message},
       pump_active:pump.mode !== 'idle',
       safety: {allowed: true, servo_allowed: true, mode: 'simulation', simulated: true, reason: 'Pretend car (preview)'},
       drive: {armed: mock.armed, px4_armed: null, input: mock.settings.driving.input, rc: {fresh: false}, deadman: false, publishing: mock.owner && (mock.linear !== 0 || mock.angular !== 0),
@@ -129,8 +203,7 @@
         cmd_vel_topic: 'cmd_vel', timeout_ms: 300, client_count: 1, you_control_owner: mock.owner,
         control_owner_present: mock.owner, calibrating: mock.calibrating, max_velocity_mps: 0.8, max_yaw_rate_rad_s: 1.4, pump_active: pump.mode !== 'idle'},
       robot: {...mock.pose, speed_mps: Math.abs(mock.linear), stationary: mock.linear === 0, odometry_fresh: true, pose_fresh: true},
-      detector: {latest_peak: Number.isFinite(mock.inspection.confirmed_angle_deg)
-          ? {angle_deg:mock.inspection.confirmed_angle_deg, signal:1, fresh:true} : null,
+      detector: {latest_peak:latestPeak(t),
         signal_ratio: ratio, threshold_ratio: 1, detected: ratio >= 1, fresh: true, fixture_angle_deg: angle,
         sweep_enabled: mock.sweep, sweep_speed_deg_s: 36, sweep_speed_min: 5, sweep_speed_max: 180, beam_half_angle_deg: 45,
         beam_min_angle_deg: -45, beam_max_angle_deg: 45, beam: [],
@@ -170,17 +243,24 @@
       let m; try { m = JSON.parse(raw); } catch { return; }
       if (m.type === 'latency_ping') return setTimeout(() => this.emit({type: 'latency_pong', probe_id: m.probe_id}), 18);
       if (m.type === 'take_control') { mock.owner = true; mock.armed = true; stopPump(); return; }
-      if (m.type === 'release_control' || m.type === 'estop') { mock.owner = mock.armed = false; mock.linear = mock.angular = 0; mock.sweep = false; stopPump(); return; }
+      if (m.type === 'release_control' || m.type === 'estop') { mock.owner = mock.armed = false; mock.linear = mock.angular = 0; mock.sweep = false; cancelMark('Mark cancelled by Stop or loss of control.'); stopPump(); return; }
       if (!mock.owner) return;
       if (m.type === 'pump_mark' && !mock.calibrating && !mock.inspection.active && !mock.cycle && pump.mode === 'idle') {
-        const settings = mock.settings.marking, fix = mock.fieldFix();
-        Object.assign(pump, {mode:'shot', output:settings.active_percent,
-          until:performance.now() + settings.duration_s * 1000, lastRequest:m.request_id});
-        const within = fix && Number.isFinite(fix.horizontal_accuracy_m) && fix.horizontal_accuracy_m <= mock.settings.gnss.target_accuracy_m;
-        previewLog({id:m.request_id || String(Date.now()), timestamp:Date.now()/1000,
-          kind:'pump_mark', status:'SHOT COMMANDED', statusType:'marked', ...settings, ...fix,
-          x:mock.pose.x, y:mock.pose.y, heading_deg:mock.pose.yaw * 180 / Math.PI,
-          gps_status:within ? 'within_target' : fix ? 'uncertain' : 'unavailable'});
+        const id = m.request_id || String(Date.now());
+        const geometry = mock.settings.probe_guidance, t = (performance.now()-started)/1000, peak = latestPeak(t);
+        const metal = geometry && peak?.fresh && t-mock.detectorAt < .5
+          ? geometryPoint(peak.angle_deg, geometry.coil_radius_m, peak.pose) : null;
+        if (metal) mock.markTarget = {id,...metal};
+        const guide = guidance();
+        const reject = reason => this.emit({type:'error',command_type:'pump_mark',request_id:m.request_id,message:reason});
+        if (!geometry || !mock.markTarget) { reject(guide.reason); return; }
+        if (!guide.reachable) { reject('Drive the metal point onto the probe arc before marking.'); return; }
+        if (!mock.armed || mock.linear || mock.angular) { reject('Stop and arm the vehicle before marking.'); return; }
+        mock.sweep = false;
+        Object.assign(pump,{mode:'aiming',output:0,until:performance.now()+700,
+          activeRequest:m.request_id,angle:guide.angle_deg,socket:this,message:'Aiming probe nozzle at the metal point.',
+          event:{id,metal_x:mock.markTarget.x,metal_y:mock.markTarget.y,
+            ...(metal ? {fixture_angle_deg:peak.angle_deg,peak_pose:{...peak.pose}} : {})}});
         return;
       }
       if (m.type === 'pump_manual') {
@@ -196,21 +276,23 @@
         routes = m.settings.routes;
         probeTrigger = m.settings.probe_trigger;
         adcFiltered.clear();
+        mock.latestPeak = null;
         resetContact();
         adcRevision++;
         this.emit({type:'adc_result',ok:true,message:'Applied in preview.'});
         return;
       }
-      if (m.type === 'settings' && ['driving','display','cameras','gnss','marking','inspection','probe_alignment','probe_scan','probe_stroke'].includes(m.section)) {
+      if (m.type === 'settings' && ['driving','display','cameras','gnss','marking','inspection','probe_guidance','probe_alignment','probe_scan','probe_stroke'].includes(m.section)) {
         mock.settings[m.section] = m.value;
         this.emit({type:'settings_result',section:m.section,ok:true,message:'Saved in preview.'});
         return;
       }
-      if (m.type === 'clear_log') mock.fieldEntries.length = 0;
+      if (m.type === 'clear_log') { mock.fieldEntries.length = 0; mock.markTarget = null; }
       if (m.type === 'log_pose') previewLog({status:'POSE LOGGED'});
       if (m.type === 'drive' && mock.owner && !mock.calibrating) {
         mock.linear = m.deadman ? m.linear_x : 0;
         mock.angular = m.deadman ? m.angular_z : 0;
+        if (mock.linear || mock.angular) cancelMark('Vehicle moved; mark cancelled.');
         if ((mock.linear || mock.angular) && (mock.inspection.active || mock.inspection.confirmed_angle_deg != null)) {
           if (mock.inspection.phase === 'PROBING') mock.cycle = false;
           Object.assign(mock.inspection, {phase:'STOPPED', active:false, confirmed_angle_deg:null, message:'Vehicle moved. Confirm the target again before probing.'});
@@ -218,7 +300,9 @@
         return;
       }
       if (m.type === 'align_probe' && !mock.inspection.active) {
-        const angle = m.target_bearing_deg - mock.settings.probe_alignment.offset_deg;
+        const guide = guidance();
+        const angle = m.stored_target_id ? (guide.reachable && guide.target?.id === m.stored_target_id ? guide.angle_deg : NaN)
+          : m.target_bearing_deg - mock.settings.probe_alignment.offset_deg;
         if (Number.isFinite(angle) && Math.abs(angle) <= 45) {
           mock.armAngle = angle;
           mock.sweep = false;
@@ -254,7 +338,7 @@
         mock.phaseAt = t;
       }
     }
-    close() { clearInterval(this.timer); if (this.readyState === 3) return; this.readyState = 3; this.onclose?.({}); }
+    close() { cancelMark('Mark cancelled: connection lost.'); stopPump(); clearInterval(this.timer); if (this.readyState === 3) return; this.readyState = 3; this.onclose?.({}); }
   }
   for (const k of ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED']) MockSocket[k] = RealWebSocket[k];
 

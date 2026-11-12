@@ -838,7 +838,7 @@ function triggerPumpMark() {
   if (pendingPumpMark) return;
   pendingPumpMark = {at: performance.now(), id: `mark-${Date.now()}-${Math.random().toString(36).slice(2)}`};
   send({type: 'pump_mark', request_id: pendingPumpMark.id});
-  showNotice('Marking pump requested. Waiting for the operator stack.');
+  showNotice('Mark requested. Waiting for the arm to aim the probe nozzle.');
 }
 
 function startProbeCycle() {
@@ -934,6 +934,13 @@ function getProbeAlignment() {
   const peakSignal = peakAngle === null ? 0 : peak.signal;
 
   if (peakAngle === null) {
+    const guide = state.probe_guidance;
+    if (state.connected && guide?.available && guide.target && Number.isFinite(guide.angle_deg)) {
+      return {hasPeak:true, peakAngle:guide.angle_deg + probeOffsetDeg(), peakSignal:0,
+        pivotAngle:guide.angle_deg, reachable:guide.reachable === true, deficitDeg:0,
+        targetId:guide.target.id, reason:guide.reachable ? 'Align the probe to the marked ground point.'
+          : guide.reason || 'Drive closer to the marked point and within the arm range.'};
+    }
     return {
       hasPeak: false,
       peakAngle: null,
@@ -984,7 +991,8 @@ function alignProbeToPeak() {
   if (blocked) { showNotice(blocked); return; }
   const align = getProbeAlignment();
   if (!align.hasPeak || !align.reachable) { showNotice(align.reason); return; }
-  send({type: 'align_probe', target_bearing_deg: align.peakAngle, angle_deg: align.pivotAngle});
+  send(align.targetId ? {type:'align_probe', stored_target_id:align.targetId}
+    : {type:'align_probe', target_bearing_deg:align.peakAngle, angle_deg:align.pivotAngle});
   showNotice(`Arm alignment requested to ${Number(align.pivotAngle.toFixed(1))}°.`);
 }
 
@@ -1220,7 +1228,19 @@ function renderInspection() {
   }));
 }
 
+function updateProbeGuidance() {
+  const output = $('probe-guidance-status');
+  if (!output) return;
+  const guide = state.probe_guidance;
+  const live = state.connected && guide?.available &&
+    [guide.distance_m, guide.forward_m, guide.left_m].every(Number.isFinite);
+  output.textContent = live
+    ? `Probe to mark: ${guide.distance_m.toFixed(2)} m · ${Math.abs(guide.forward_m).toFixed(2)} m ${guide.forward_m >= 0 ? 'forward' : 'back'} · ${Math.abs(guide.left_m).toFixed(2)} m ${guide.left_m >= 0 ? 'left' : 'right'}${guide.reachable ? ' · Ready to align' : ''}`
+    : `Probe guide: ${state.connected ? guide?.reason || 'Save geometry and mark a fresh detection.' : 'Disconnected.'}`;
+}
+
 function updateHud() {
+  updateProbeGuidance();
   updateAlignmentSettings();
   updatePower();
   updateArmSettings();
@@ -1330,13 +1350,20 @@ function updateHud() {
   if (pendingPumpMark && state.marking?.last_shot_request === pendingPumpMark.id) {
     pendingPumpMark = null;
     showNotice('Shot commanded. Check the ground mark visually.');
+  } else if (pendingPumpMark && state.marking?.active_request === pendingPumpMark.id) {
+    pendingPumpMark.at = performance.now();
   } else if (pendingPumpMark && performance.now() - pendingPumpMark.at > 3000) {
     pendingPumpMark = null;
     showNotice('No shot acknowledgement. Check the mission log before retrying.');
   }
   $('mode-mark-btn').disabled = Boolean(markBlock) || Boolean(pendingPumpMark);
-  $('mode-mark-btn').title = markBlock || 'Run the saved marking shot.';
-  $('mode-mark-pill').textContent = pumpActive ? 'COMMAND ACTIVE' : pendingPumpMark ? 'WAITING' : markBlock ? 'BLOCKED' : `${state.marking.settings.duration_s} s`;
+  $('mode-mark-btn').title = state.marking?.message || markBlock || 'Aim the probe nozzle at the metal point, then spray.';
+  const markPhase = {aiming:'AIMING', settling:'SETTLING', shot:'SPRAYING', manual:'MANUAL TEST'}[state.marking?.mode];
+  $('mode-mark-pill').textContent = pumpActive ? markPhase || 'COMMAND ACTIVE' : pendingPumpMark ? 'WAITING' : markBlock ? 'BLOCKED' : `${state.marking.settings.duration_s} s`;
+  if (pumpActive && state.marking?.message) {
+    $('mode-mark-help').textContent = state.marking.message;
+    $('mode-mark-help').hidden = false;
+  }
   window.updateMarkingSettings?.();
   $('clear-target-log').disabled = !state.connected || !owner || !targetLog.length;
   $('mark-target-btn').disabled = !owner || !state.connected || robot.pose_fresh !== true || ![robot.x, robot.y, robot.yaw].every(Number.isFinite);
@@ -2275,6 +2302,20 @@ function drawMap(pose = state.robot) {
     context.stroke();
   }
 
+  const guide = state.probe_guidance;
+  if (state.connected && guide?.available) {
+    const tokens = getComputedStyle(document.documentElement);
+    for (const [point, token, label] of [[guide.target, '--warn', 'Mark'], [guide.tip, '--accent', 'Probe']]) {
+      if (!point || ![point.x, point.y].every(Number.isFinite)) continue;
+      const screen = toScreen(point.x, point.y);
+      context.fillStyle = tokens.getPropertyValue(token).trim();
+      context.beginPath();
+      context.arc(screen.x, screen.y, 4, 0, Math.PI * 2);
+      context.fill();
+      context.fillText(label, screen.x + 7, screen.y - 7);
+    }
+  }
+
   // Verified & marked targets from targetLog
   for (const t of targetLog) {
     if (!Number.isFinite(t.x) || !Number.isFinite(t.y)) continue;
@@ -2937,7 +2978,7 @@ function initializeCameraSettings() {
   requestAnimationFrame(previewLoop);
 }
 
-function armSetupForm({section, fields, save, status, describe, invalid, applies, preview}) {
+function armSetupForm({section, fields, save, status, describe, invalid, applies, preview, allowUnset = false}) {
   const inputs = Object.entries(fields).map(([key, id]) => [key, $(id)]);
   const button = $(save), feedback = $(status);
   let dirty = false, pending = null, message = '';
@@ -2945,6 +2986,7 @@ function armSetupForm({section, fields, save, status, describe, invalid, applies
   function render() {
     const saved = state.settings?.[section];
     const available = state.connected && inputs.every(([key]) => Number.isFinite(saved?.[key]));
+    const editable = available || (allowUnset && state.connected && Object.hasOwn(state.settings || {}, section));
     const owner = state.connected && state.drive.you_control_owner;
     if (!owner) {
       pending = null;
@@ -2963,17 +3005,17 @@ function armSetupForm({section, fields, save, status, describe, invalid, applies
     for (const [key, input] of inputs) {
       const value = available ? String(saved[key]) : '';
       if (!dirty && input.value !== value) input.value = value;
-      input.readOnly = !owner || !available || Boolean(pending);
+      input.readOnly = !owner || !editable || Boolean(pending);
       if (input.hasAttribute('data-positive'))
-        input.setCustomValidity(input.valueAsNumber <= 0 ? 'Enter a speed greater than zero.' : '');
+        input.setCustomValidity(input.valueAsNumber <= 0 ? 'Enter a value greater than zero.' : '');
     }
     const valid = inputs.every(([, input]) => Number.isFinite(input.valueAsNumber) && input.validity.valid);
-    const changed = available && inputs.some(([key, input]) => input.valueAsNumber !== saved[key]);
-    button.disabled = !owner || !available || Boolean(pending) || !valid || !changed;
-    feedback.textContent = !available ? 'Waiting for car settings.'
+    const changed = editable && (!available || inputs.some(([key, input]) => input.valueAsNumber !== saved[key]));
+    button.disabled = !owner || !editable || Boolean(pending) || !valid || !changed;
+    feedback.textContent = !editable ? 'Waiting for car settings.'
       : !owner ? 'Take control to edit.'
       : pending ? 'Saving…' : message
-      || (!valid ? invalid : changed ? `Unsaved change. The car uses ${describe(saved)}.` : applies);
+      || (!valid ? invalid : changed ? available ? `Unsaved change. The car uses ${describe(saved)}.` : 'Save all four measurements to enable guidance.' : applies);
     preview?.();
   }
 
@@ -3030,6 +3072,10 @@ function showScanCoverage() {
 }
 
 const armSetupForms = new Map([
+  ['probe_guidance', armSetupForm({section:'probe_guidance', allowUnset:true,
+    fields:{pivot_x_m:'guidance-pivot-x',pivot_y_m:'guidance-pivot-y',coil_radius_m:'guidance-coil-radius',probe_radius_m:'guidance-probe-radius'},
+    save:'guidance-save', status:'guidance-settings-status', describe:() => 'the saved geometry',
+    invalid:'Enter finite pivot coordinates and radii greater than zero.', applies:'Applies to the next mark and live probe guidance.'})],
   ['probe_alignment', armSetupForm({section:'probe_alignment', fields:{offset_deg:'arm-probe-offset'},
     save:'arm-probe-offset-save', status:'arm-probe-offset-status', describe:saved => `${saved.offset_deg}°`,
     invalid:'Enter an offset from −180° to 180°.', applies:'Applies to the next aim or probe scan.'})],

@@ -10,6 +10,43 @@ DASHBOARD = pathlib.Path(__file__).resolve().parents[1] / 'dashboard'
 
 @unittest.skipUnless(shutil.which('chromium'), 'Chromium required')
 class BrowserInputs(unittest.TestCase):
+    def test_preview_mark_aims_before_spray(self):
+        setup = """
+let now=1000;Object.defineProperty(performance,'now',{value:()=>now});
+const intervals=[];window.setInterval=fn=>{intervals.push(fn);return intervals.length;};
+window.setTimeout=fn=>{fn();return 1;};
+"""
+        checks = """
+const assert=(condition,message)=>{if(!condition)throw Error(message);};
+const socket=new WebSocket('/ws'),messages=[];socket.onmessage=e=>messages.push(JSON.parse(e.data));
+const send=m=>socket.send(JSON.stringify(m));
+const tick=ms=>{now+=ms;intervals[0]();return messages.at(-1);};
+const mock=window.__mockCar;send({type:'take_control'});
+mock.settings.probe_guidance={pivot_x_m:0,pivot_y_m:0,coil_radius_m:.4,probe_radius_m:.4};
+mock.settings.marking.idle_percent=17;mock.markTarget={id:'saved',x:.4,y:0};tick(100);
+send({type:'pump_mark',request_id:'first'});let state=tick(100);
+assert(state.marking.mode==='aiming' && state.marking.active_request==='first' && state.marking.output_percent===0 && !mock.fieldEntries.length,'preview aim cannot spray or log');
+state=tick(701);assert(state.marking.mode==='settling' && state.marking.output_percent===0 && !state.marking.last_shot_request,'preview waits after arm reaches target');
+state=tick(351);assert(state.marking.mode==='shot' && state.marking.last_shot_request==='first' && mock.fieldEntries.length===1,'preview sprays and logs only after settle');
+state=tick(2100);assert(state.marking.mode==='idle','preview timed spray stops');
+send({type:'pump_mark',request_id:'move'});send({type:'drive',deadman:true,linear_x:.1,angular_z:0});state=tick(100);
+assert(state.marking.mode==='idle' && messages.some(m=>m.type==='error' && m.request_id==='move') && mock.fieldEntries.length===1,'moving cancels pending mark without spray');
+send({type:'drive',deadman:false});mock.pose={x:0,y:0,yaw:0};mock.markTarget={id:'far',x:2,y:0};
+send({type:'pump_mark',request_id:'far'});state=tick(100);
+assert(state.probe_guidance.target.id==='far' && state.marking.mode==='idle' && messages.some(m=>m.type==='error' && m.request_id==='far'),'unreachable target remains available for driving without spray');
+mock.markTarget={id:'saved',x:.4,y:0};send({type:'pump_mark',request_id:'stop'});send({type:'estop'});state=tick(100);
+assert(state.marking.mode==='idle' && mock.fieldEntries.length===1,'Stop cancels aim without another mark');
+document.body.textContent='MOCK MARK TESTS PASSED';
+"""
+        html = '<body><script>try {' + setup + (DASHBOARD / 'mock-car.js').read_text() + checks + "} catch(e) {document.body.textContent='TEST FAILED: '+e.stack;}</script>"
+        with tempfile.TemporaryDirectory() as tmp:
+            page = pathlib.Path(tmp) / 'mock.html'
+            page.write_text(html)
+            result = subprocess.run(['chromium', '--headless', '--no-sandbox', '--disable-gpu',
+                                     '--user-data-dir='+tmp+'/profile', '--virtual-time-budget=1000',
+                                     '--dump-dom', page.as_uri()], capture_output=True, text=True, timeout=60)
+            self.assertIn('MOCK MARK TESTS PASSED</body>', result.stdout, result.stdout+result.stderr[-1000:])
+
     def test_inputs_and_stop_gates(self):
         html = (DASHBOARD / 'index.html').read_text()
         import re
@@ -94,6 +131,28 @@ assert(offsetInput.value==='-17.25' && !offsetSave.disabled && $('arm-probe-offs
 offsetSave.click(); state.settings.probe_alignment.offset_deg=-17.25; updateHud();
 assert(offsetInput.value==='-17.25' && offsetSave.disabled && $('arm-probe-offset-status').textContent.includes('Saved on car'),'telemetry confirms applied offset');
 for(const limit of ['-180','0','180']) { editOffset(limit); assert(!offsetSave.disabled, 'signed endpoints and zero are valid'); }
+const geometryIds=['guidance-pivot-x','guidance-pivot-y','guidance-coil-radius','guidance-probe-radius'];
+const geometrySave=$('guidance-save'), beforeGeometry=sent.length;
+state.settings.probe_guidance=null; updateAlignmentSettings();
+assert(geometryIds.every(id=>!$(id).readOnly && !$(id).value) && geometrySave.disabled,
+  'unconfigured geometry has editable empty measurements without invented defaults');
+const editGeometry=values=>{geometryIds.forEach((id,i)=>{$(id).value=values[i];});$('guidance-probe-radius').dispatchEvent(new Event('input'));};
+for(const values of [[0,0,0,.4],[0,0,.3,-.4],[0,'',.3,.4]]) {
+  editGeometry(values);geometrySave.click();
+  assert(geometrySave.disabled && sent.length===beforeGeometry,'incomplete or nonpositive geometry cannot save');
+}
+editGeometry([.2,-.1,.3,.4]);updateAlignmentSettings();
+assert(!geometrySave.disabled && $('guidance-pivot-y').value==='-0.1','signed pivot and positive radii survive telemetry');
+geometrySave.click();
+assert(sent.at(-1).section==='probe_guidance' && sent.at(-1).type==='settings' &&
+  JSON.stringify(sent.at(-1).value)===JSON.stringify({pivot_x_m:.2,pivot_y_m:-.1,coil_radius_m:.3,probe_radius_m:.4}),
+  'first geometry save sends all four measured values');
+assert(sent.slice(beforeGeometry).every(m=>m.type==='settings'),'editing geometry sends no motion command');
+state.settings.probe_guidance={...sent.at(-1).value};updateAlignmentSettings();
+assert(geometrySave.disabled && $('guidance-settings-status').textContent.includes('Saved on car'),'car telemetry acknowledges first geometry save');
+state.drive.you_control_owner=false;updateAlignmentSettings();
+assert(geometryIds.every(id=>$(id).readOnly),'spectator geometry stays read-only');
+state.drive.you_control_owner=true;updateAlignmentSettings();
 const scanCount=$('arm-scan-count'), scanSpacing=$('arm-scan-spacing'), scanSave=$('arm-scan-save'), scanCoverage=$('arm-scan-coverage');
 const beforeScan=sent.length;
 assert(scanCount.readOnly && !scanCount.value && scanSave.disabled, 'missing probe scan defaults do not enable writes');
@@ -947,6 +1006,25 @@ state.probe.active = state.probe.holding = false; updateHud();
 
 state.detector.latest_peak.fresh = false; updateHud();
 assert($('detector-align-probe').disabled && $('align-probe-hint').textContent.includes('fresh'), 'stale peak cannot fall back to stored detections');
+state.probe_guidance={available:true,target:{id:'fixture-mark',x:1.5,y:2},tip:{x:1.3,y:2.1},
+  distance_m:.22,forward_m:.2,left_m:-.1,radial_error_m:.01,angle_deg:5,reachable:true};
+const beforeGuide=sent.length;updateHud();
+assert($('probe-guidance-status').textContent.includes('0.22 m') && $('probe-guidance-status').textContent.includes('0.20 m forward') &&
+  $('probe-guidance-status').textContent.includes('0.10 m right'),'guidance shows measured distance and signed body offsets');
+assert(!$('detector-align-probe').disabled && getProbeAlignment().targetId==='fixture-mark','stored reachable mark enables alignment after peak expires');
+$('detector-align-probe').click();
+assert(sent.at(-1).type==='align_probe' && sent.at(-1).stored_target_id==='fixture-mark' && !('target_bearing_deg' in sent.at(-1)),
+  'stored alignment sends target identity for server recomputation');
+state.probe_guidance.reachable=false;state.probe_guidance.reason='Drive closer to the probe arc.';updateHud();
+assert($('detector-align-probe').disabled && $('align-probe-hint').textContent.includes('Drive closer'),'unreachable stored target disables align with drive guidance');
+state.detector.latest_peak.fresh=true;updateHud();
+assert(!$('detector-align-probe').disabled && !getProbeAlignment().targetId,'fresh peak has priority over stored target');
+$('detector-align-probe').click();
+assert(sent.at(-1).target_bearing_deg===20 && !('stored_target_id' in sent.at(-1)),'fresh peak keeps bearing alignment command');
+state.probe_guidance={available:false,reason:'Odometry unavailable.'};updateHud();
+assert($('probe-guidance-status').textContent.includes('Odometry unavailable.'),'unavailable guidance explains why no offset is shown');
+assert(sent.slice(beforeGuide).every(m=>m.type==='align_probe'),'guidance updates and align never send a drive command');
+delete state.probe_guidance;
 state.detector.latest_peak.fresh = true;
 state.robot.stationary = false; updateHud();
 assert(!$('start-probing').disabled && !$('probe-slider').disabled && !$('mode-mark-btn').disabled && !$('detector-align-probe').disabled, 'RC permits search actions without stationary odometry');
@@ -974,7 +1052,27 @@ state.pump_active = false; state.drive.pump_active = false;
 triggerPumpMark();
 assert(targetLog.length === 0 && pendingPumpMark, 'pump request does not claim a physical mark');
 assert(sent.at(-1).type === 'pump_mark' && !Object.hasOwn(sent.at(-1), 'duration_s'), 'mission shot uses car duration');
+const phasedMarkId=pendingPumpMark.id, beforeMarkPhases=sent.length;
+state.pump_active=true;state.marking.active_request=phasedMarkId;state.marking.mode='aiming';
+state.marking.message='Aiming probe nozzle at the metal point.';pendingPumpMark.at=performance.now()-10000;updateHud();
+assert(pendingPumpMark?.id===phasedMarkId && $('mode-mark-pill').textContent==='AIMING' && $('mode-mark-btn').disabled,
+  'acknowledged aiming keeps pending mark past the old three-second timeout');
+assert($('mode-mark-help').textContent.includes('Aiming probe nozzle') && !state.marking.last_shot_request,
+  'aiming reports progress without claiming spray');
+state.marking.mode='settling';state.marking.message='Waiting for probe nozzle to settle.';
+pendingPumpMark.at=performance.now()-10000;updateHud();
+assert(pendingPumpMark?.id===phasedMarkId && $('mode-mark-pill').textContent==='SETTLING','settling continues waiting without false timeout');
+state.marking.mode='shot';state.marking.message='Spraying the marked ground point.';
 state.pump_active = true; state.marking.last_shot_request = pendingPumpMark.id; updateHud();
+assert($('mode-mark-pill').textContent==='SPRAYING' && !pendingPumpMark,'spray acknowledgement clears pending and reports spraying');
+assert(sent.length===beforeMarkPhases,'phase telemetry sends no motion or pump commands');
+state.pump_active=false;state.marking.active_request=null;state.marking.mode='idle';state.marking.message='';
+triggerPumpMark();const failedMark=pendingPumpMark.id;
+state.marking.mode='aiming';state.marking.active_request=failedMark;state.pump_active=true;updateHud();
+socket.onmessage({data:JSON.stringify({type:'error',command_type:'pump_mark',request_id:failedMark,message:'Arm aim failed; no spray.'})});
+assert(!pendingPumpMark && state.marking.last_shot_request!==failedMark,'asynchronous aim error releases pending without claiming spray');
+state.pump_active=false;state.marking.active_request=null;state.marking.mode='idle';state.marking.message='';
+
 assert(!pendingPumpMark && !targetLog.length, 'shot acknowledgement leaves logging to the car');
 state.pump_active = false;
 $('settings').click();
