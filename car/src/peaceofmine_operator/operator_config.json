@@ -1,14 +1,14 @@
 {
   "arm": {
     "servo_id": 1,
-    "minimum": 943,
-    "center": 1514,
-    "maximum": 2013
+    "minimum": 618,
+    "center": 1562,
+    "maximum": 2222
   },
   "probe": {
     "servo_id": 2,
-    "max_extension_mm": 120.0,
-    "travel_ticks": 5430
+    "max_extension_mm": 152.1199143468951,
+    "travel_ticks": 6216
   },
   "metal_detector": {
     "baseline_adc": 127.27697699999999,
@@ -16,18 +16,20 @@
     "reference_voltage": 5.0
   },
   "schema_version": 1,
-  "revision": 50,
+  "revision": 80,
   "section_revisions": {
-    "arm": 29,
+    "arm": 77,
     "adc": 33,
     "driving": 35,
     "cameras": 30,
     "probe_direction": 10,
     "inspection": 17,
     "metal_detector": 27,
-    "probe_stroke": 31,
+    "probe_stroke": 76,
     "probe_guidance": 32,
-    "probe_contact": 50
+    "probe_contact": 80,
+    "probe": 75,
+    "probe_scan": 78
   },
   "adc": {
     "config": {
@@ -152,8 +154,8 @@
     "passes": 2
   },
   "probe_stroke": {
-    "down_mm_s": 10.0,
-    "retract_mm_s": 10.0,
+    "down_mm_s": 40.0,
+    "retract_mm_s": 30.0,
     "home_load_percent": 10.0
   },
   "probe_guidance": {
@@ -164,7 +166,11 @@
   },
   "probe_contact": {
     "source": "esp32",
-    "threshold_counts": null,
-    "zero_counts": -1255369
+    "threshold_counts": 100000,
+    "zero_counts": -1255504.2519607844
+  },
+  "probe_scan": {
+    "point_count": 5,
+    "spacing_deg": 10.0
   }
 }
