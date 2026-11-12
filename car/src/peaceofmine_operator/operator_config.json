@@ -11,15 +11,20 @@
     "travel_ticks": 5430
   },
   "metal_detector": {
-    "baseline_adc": 36.04,
-    "full_response_adc": 105.0,
+    "baseline_adc": 36.040017,
+    "full_response_adc": 105.000024,
     "reference_voltage": 5.0
   },
   "schema_version": 1,
-  "revision": 4,
+  "revision": 19,
   "section_revisions": {
-    "arm": 2,
-    "adc": 4
+    "arm": 14,
+    "adc": 4,
+    "driving": 19,
+    "cameras": 8,
+    "probe_direction": 10,
+    "inspection": 17,
+    "metal_detector": 16
   },
   "adc": {
     "config": {
@@ -104,5 +109,42 @@
       "hysteresis": 0,
       "debounce_ms": 0
     }
+  },
+  "driving": {
+    "input": "rc",
+    "forward_percent": 100,
+    "reverse_percent": 100
+  },
+  "cameras": {
+    "forward": {
+      "source": "raspberry:self_camera_front_camera_info",
+      "rotation": 180
+    },
+    "auxiliary": {
+      "source": "off",
+      "rotation": 0
+    },
+    "capture": {
+      "forward": {
+        "device": "auto",
+        "width": 640,
+        "height": 480,
+        "framerate": 30,
+        "pixel_format": "mjpeg2rgb"
+      },
+      "auxiliary": {
+        "device": "auto",
+        "width": 640,
+        "height": 480,
+        "framerate": 30,
+        "pixel_format": "yuyv2rgb"
+      }
+    }
+  },
+  "probe_direction": {
+    "reverse": true
+  },
+  "inspection": {
+    "passes": 2
   }
 }

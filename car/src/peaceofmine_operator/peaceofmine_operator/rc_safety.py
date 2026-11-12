@@ -71,7 +71,9 @@ class RcSafety:
             return dict(fresh=False)
         def axis(channel):
             value = max(-1.0, min(1.0, (channels[channel - 1] - 1500) / 500))
-            return 0.0 if abs(value) < .05 else value
+            # Match the Xbox stick deadzone. This transmitter rests near 0.066,
+            # which the old 0.05 band treated as driving and cancelled Confirm arc.
+            return 0.0 if abs(value) < .12 else value
         return dict(fresh=True, channels=channels, steering=axis(steering_channel),
                     throttle=axis(throttle_channel), steering_channel=steering_channel,
                     throttle_channel=throttle_channel)

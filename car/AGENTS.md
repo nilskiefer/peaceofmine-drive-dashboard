@@ -124,6 +124,11 @@ Settings → **Controller mapping** is for the browser pad only. For keyboard
 control, select **WASD keyboard** in Settings, focus the forward camera, and
 hold `Shift` while using WASD.
 
+RC through ROS uses the same 0.12 stick center band as the gamepad. Do not
+tighten it back to 0.05. This transmitter rests near 0.066, and any non-zero
+RC command is treated as driving, which cancels Confirm arc with "Vehicle
+moved". WASD does not read that stick.
+
 Example launch options:
 
 ```bash
