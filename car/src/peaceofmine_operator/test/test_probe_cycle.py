@@ -353,6 +353,10 @@ class OperatorControlProbeTest(unittest.TestCase):
         self.ctrl._armed = True
         self.ctrl._calibrating = False
         self.ctrl._speed = 0.0
+        self.ctrl._odometry_at = 0.
+        self.ctrl._motion_speed = float('inf')
+        self.ctrl._deadman = False
+        self.ctrl._command = (0., 0.)
         self.ctrl._stationary = lambda: self.ctrl._speed <= self.ctrl._probe_speed_limit
         self.ctrl._probe_speed_limit = 0.03
         self.ctrl._probe_fault = False
@@ -366,15 +370,20 @@ class OperatorControlProbeTest(unittest.TestCase):
         self.ctrl._permission_pub = MagicMock()
         self.ctrl._pump_pub = MagicMock()
         self.ctrl._pump_active = False
+        self.ctrl._mark_job = None
+        self.ctrl._mark_message = ''
         self.ctrl._marking = dict(duration_s=1.5, idle_percent=7., active_percent=65., manual_percent=22.)
         self.ctrl._pump_mode = 'idle'
         self.ctrl._pump_output = self.ctrl._pump_until = 0.
         self.ctrl._pose_at = self.ctrl._inspection_detector_at = 0.
+        self.ctrl._guidance_geometry = None
+        self.ctrl._guidance_target = None
         self.ctrl._inspection_detector = {}
         self.ctrl._mark_pub = MagicMock()
         self.ctrl._drive_input = 'controller'
         self.ctrl.create_timer = MagicMock()
         self.ctrl.destroy_timer = MagicMock()
+        self.ctrl._rc_controls = lambda: dict(fresh=True, steering=0., throttle=0.)
         self.ctrl._rc_safety = MagicMock()
         self.ctrl._rc_safety.simulation = True
         self.ctrl._rc_safety.snapshot.return_value = {'allowed': True, 'servo_allowed': True}
@@ -416,23 +425,18 @@ class OperatorControlProbeTest(unittest.TestCase):
         self.ctrl._stationary=lambda:False
         self.assertIsNone(self.ctrl.handle_command('client1',dict(type='align_probe',angle_deg=-15.)))
 
-    def test_pump_mark_dispatches_when_stationary_and_stowed(self):
-        res = self.ctrl.handle_command('client1', {'type': 'pump_mark', 'duration_s': 2.0})
-        self.assertIsNone(res)
-        self.assertTrue(self.ctrl._pump_active)
-        self.ctrl._pump_pub.publish.assert_called_once()
-        published_msg = self.ctrl._pump_pub.publish.call_args[0][0]
-        self.assertEqual(published_msg.data, 65.)
-        self.assertAlmostEqual(self.ctrl._pump_until - time.monotonic(), 1.5, delta=.1)
-        mark = json.loads(self.ctrl._mark_pub.publish.call_args.args[0].data)
-        self.assertEqual(mark['duration_s'], 1.5)
-        self.assertIsNone(mark['x'])
+    def test_automatic_mark_requires_a_measured_target(self):
+        res = self.ctrl.handle_command('client1', dict(type='pump_mark'))
+        self.assertEqual(res['type'], 'error')
+        self.ctrl._pump_pub.publish.assert_not_called()
+        self.ctrl._mark_pub.publish.assert_not_called()
 
-    def test_mark_does_not_require_odometry_or_probe_telemetry(self):
-        self.ctrl._probe_state={}
-        self.ctrl._stationary=lambda:False
-        self.assertIsNone(self.ctrl.handle_command('client1',dict(type='pump_mark',duration_s=2.)))
-        self.assertTrue(self.ctrl._pump_active)
+    def test_mark_requires_odometry(self):
+        self.ctrl._probe_state = {}
+        self.ctrl._stationary = lambda: False
+        res = self.ctrl.handle_command('client1', dict(type='pump_mark'))
+        self.assertIn('Confirm arc', res['message'])
+        self.assertFalse(self.ctrl._pump_active)
 
     def test_mark_blocks_active_probe_operation(self):
         for active in ('cycle_active','active','holding'):
@@ -440,7 +444,7 @@ class OperatorControlProbeTest(unittest.TestCase):
             res=self.ctrl.handle_command('client1',dict(type='pump_mark',duration_s=2.))
             self.assertIn('active probe',res['message'])
         self.ctrl._probe_state={'probe':dict(depth_mm=15.,ready=False)}
-        self.assertIsNone(self.ctrl.handle_command('client1',dict(type='pump_mark',duration_s=2.)))
+        self.assertEqual(self.ctrl.handle_command('client1',dict(type='pump_mark'))['type'], 'error')
 
     def test_pump_mark_blocked_when_already_active(self):
         self.ctrl._pump_active = True
@@ -461,7 +465,7 @@ class OperatorControlProbeTest(unittest.TestCase):
         self.assertEqual(self.ctrl._pump_pub.publish.call_args.args[0].data, 7.)
 
     def test_stop_motion_aborts_pump(self):
-        self.ctrl.handle_command('client1', dict(type='pump_mark'))
+        self.ctrl.handle_command('client1', dict(type='pump_manual', action='start', percent=32.))
         self.ctrl._stop_motion_locked()
         self.assertFalse(self.ctrl._pump_active)
         self.assertEqual(self.ctrl._pump_pub.publish.call_args.args[0].data, 0.)

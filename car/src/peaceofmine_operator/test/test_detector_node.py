@@ -24,6 +24,15 @@ class DetectorTest(unittest.TestCase):
     def tearDown(self):
         self.node.destroy_node()
 
+    def test_peak_without_fresh_odometry_cannot_supply_a_ground_pose(self):
+        self.node.pose = dict(x=12., y=3., yaw=0.)
+        self.node.record_spatial(2., time.monotonic(), 0., True, None, True)
+        self.assertIsNone(self.node.latest_peak['pose'])
+        message = Odometry()
+        message.pose.pose.orientation.w = 1.
+        self.node.odometry_cb(message)
+        self.assertIsNone(self.node.latest_peak)
+
     def test_signed_volts_survive_detection_history_and_control(self):
         from peaceofmine_operator.detector import calibration_values
         self.node.baseline, self.node.full_response, self.node.reference_voltage = calibration_values(

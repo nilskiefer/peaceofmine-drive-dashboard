@@ -18,6 +18,16 @@ class FieldTest(unittest.TestCase):
         self.addCleanup(lambda: self.log.db.close())
         self.shot = dict(id='m1', timestamp=100., duration_s=2, x=None)
 
+    def test_metal_point_payload_survives_recorder_restart(self):
+        payload = dict(self.shot, metal_x=1.2, metal_y=-.3, fixture_angle_deg=20.,
+                       peak_pose=dict(x=0., y=0., yaw=.1), guidance_session='session')
+        self.log.record(payload, True, None, DEFAULTS, 100)
+        self.log.db.close()
+        self.log = FieldLog(self.path)
+        event = self.log.entries()[0]
+        for key in ('metal_x', 'metal_y', 'fixture_angle_deg', 'peak_pose', 'guidance_session'):
+            self.assertEqual(event[key], payload[key])
+
     def test_limits(self):
         self.assertEqual(validate(DEFAULTS), DEFAULTS)
         for wait, target in ((-1, 1), (121, 1), (True, 1), (0, 0), (0, 101), (0, float('nan'))):

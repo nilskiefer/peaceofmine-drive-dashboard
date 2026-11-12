@@ -497,3 +497,15 @@ top after homing.
 `operator_gateway.py` remains a compatibility entry point for the website server;
 `arm_servo.launch.xml` starts the driver and both controllers. The obsolete combined
 servo executable does not open a competing serial connection.
+
+### Probe guidance to a pump mark
+
+Measure and save the shared pivot X/Y in the body frame, coil radius, and probe radius under **Setup → Arm → Probe guidance**. All distances are metres; both radii must be positive. The probe bearing uses the existing saved detector-to-probe angular offset. No mounting dimensions are assumed.
+
+The spray nozzle is on the probe tip. **Mark ground** captures a fresh detector peak’s ground point, aims the arm so the nozzle is over it, waits for successful arm completion and a settled nozzle, then commands the saved pump shot and records the event. It requires measured geometry, fresh odometry, and a connected/calibrated arm. If the point is more than 5 cm from the probe arc or outside arm limits, it stays available on the local grid for manual driving guidance and the pump does not spray. Drive into reach, stop, and press **Mark ground** again. If the fresh peak has expired, the request uses the retained world point. **Align probe** still offers arm-only alignment. Setup’s manual pump control remains available for priming without a detector target.
+
+The dashboard reports aiming, settling, and spraying separately. STOP, vehicle movement, lost lease/RC permission, stale arm/odometry, an arm failure, timeout, or changed mounting settings cancel the operation. A cancelled or late arm completion cannot start the pump. Guidance never commands driving.
+
+The latest requested metal point remains the target until another fresh mark request or clearing the mission log. Browser refresh and lease transfer preserve it. Guidance requires continuous local odometry: process restart, odometry frame changes, or timestamp rollback invalidate the target. A pose reset within the same frame without a timestamp change cannot be detected; restart the operator or clear the mission log after such a reset. Historical GNSS marks cannot restore guidance.
+
+When local odometry is unavailable, **Mark ground** can instead use the current confirmed detector bearing and the saved nozzle offset. This requires a completed Confirm arc, centred fresh RC controls, measured geometry with coil/nozzle radii matching within 5 cm, and an arm angle inside the calibrated limits. It still waits for successful aiming and settling before spraying. Any driving input or changed confirmation cancels the shot; repositioning requires a new confirmation. This mode does not create a world point or enable driving guidance, and records unavailable rover coordinates as null.

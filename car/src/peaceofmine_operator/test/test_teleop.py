@@ -47,6 +47,224 @@ class TeleopTest(unittest.TestCase):
         self.command('take_control')
         self.command('arm')
 
+    def setup_guidance(self):
+        self.node._guidance_geometry = dict(pivot_x_m=0., pivot_y_m=0., coil_radius_m=1., probe_radius_m=1.)
+        self.node._pose = dict(x=0., y=0., yaw=0.)
+        self.node._pose_at = 100.
+        self.node._inspection_detector_at = 100.
+        self.node._inspection_detector = dict(fresh=True, latest_peak=dict(fresh=True, timestamp=99.9,
+            angle_deg=30., pose=dict(x=.02, y=0., yaw=0.)))
+        self.node._arm_state = dict(connected=True, position=2048, calibration=dict(minimum=1024,center=2048,maximum=3072))
+        self.node._arm_state_at = 100.
+
+    def prepare_mark(self):
+        from peaceofmine_operator.marking_settings import DEFAULTS
+        self.setup_guidance()
+        self.owner = 'mark-client'
+        self.node._arm_state.update(lifecycle='IDLE', torque=False)
+        self.node._marking = DEFAULTS
+        self.command('take_control')
+        self.node._inspection_clients['arm'].server_is_ready = lambda: True
+
+    def test_mark_aims_then_settles_before_spraying_and_logs_peak_pose(self):
+        import math
+        self.prepare_mark()
+        with patch.object(self.node, '_inspection_execute') as execute, patch.object(self.node._mark_pub, 'publish') as publish:
+            self.assertIsNone(self.command('pump_mark', request_id='shot'))
+            self.assertEqual(self.node._pump_mode, 'aiming')
+            self.assertEqual(self.node._pump_output, 0.)
+            publish.assert_not_called()
+            self.assertEqual(execute.call_args.args[:2], ('arm', 'angle'))
+            execute.call_args.args[-1](dict(success=True))
+            self.node._pump_tick(100., dict(servo_allowed=True))
+            self.assertEqual(self.node._pump_mode, 'settling')
+            publish.assert_not_called()
+            self.node._pump_tick(100.25, dict(servo_allowed=True))
+            self.assertEqual(self.node._pump_mode, 'shot')
+            event = json.loads(publish.call_args.args[0].data)
+            self.assertAlmostEqual(event['metal_x'], .02+math.cos(math.radians(30)))
+            self.assertEqual(event['peak_pose']['x'], .02)
+            self.assertEqual(self.node._last_shot_request, 'shot')
+            self.assertEqual(self.node._pump_output, self.node._marking['active_percent'])
+            self.node._stop_pump(0.)
+            # A new attempt can use the frozen world point after the peak expires.
+            self.node._inspection_detector['latest_peak'] = None
+            self.assertIsNone(self.command('pump_mark'))
+            self.assertEqual(self.node._pump_mode, 'aiming')
+        self.output.assert_not_called()
+
+    def test_confirmed_bearing_marks_without_odometry_or_invented_world_point(self):
+        self.prepare_mark()
+        self.node._pose_at = self.node._odometry_at = 0.
+        self.node._inspection.confirmed_angle = 30.
+        with patch.object(self.node, '_inspection_execute') as execute, patch.object(self.node._mark_pub, 'publish') as mark:
+            self.assertIsNone(self.command('pump_mark', request_id='relative'))
+            self.assertEqual(execute.call_args.args[2], 0.)
+            execute.call_args.args[-1](dict(success=True))
+            self.node._pump_tick(100., dict(servo_allowed=True))
+            self.node._pump_tick(100.25, dict(servo_allowed=True))
+            event = json.loads(mark.call_args.args[0].data)
+            self.assertEqual(event['mark_source'], 'confirmed_bearing')
+            self.assertIsNone(event['x'])
+            self.assertIsNone(event['y'])
+            self.assertNotIn('metal_x', event)
+            self.assertIsNone(self.node._guidance_target)
+        self.output.assert_not_called()
+
+    def test_relative_mark_explains_real_arm_limit_and_does_not_clamp(self):
+        self.prepare_mark()
+        self.node._pose_at = self.node._odometry_at = 0.
+        self.node._inspection.confirmed_angle = 3.374
+        self.node._arm_state['calibration']['minimum'] = 1818  # -20.2 degrees
+        with patch.object(self.node, '_inspection_execute') as execute:
+            result = self.command('pump_mark')
+            self.assertIn('-26.6', result['message'])
+            self.assertIn('arm range', result['message'])
+            execute.assert_not_called()
+            self.assertEqual(self.node._pump_output, 0.)
+
+    def test_relative_mark_requires_confirmation_and_matching_radius(self):
+        self.prepare_mark()
+        self.node._pose_at = self.node._odometry_at = 0.
+        self.assertIn('Confirm arc', self.command('pump_mark')['message'])
+        self.node._inspection.confirmed_angle = 30.
+        self.node._guidance_geometry['probe_radius_m'] = .5
+        self.assertIn('radii', self.command('pump_mark')['message'])
+
+    def test_relative_mark_cancels_with_physical_rc_even_in_manual_override(self):
+        from test_rc_safety import rc, state
+        self.prepare_mark()
+        self.node._pose_at = self.node._odometry_at = 0.
+        self.node._rc_safety.simulation = False
+        self.node._state_cb(state())
+        self.node._rc_cb(rc(pwm=1000))  # Manual RC still permits servos, not ROS driving.
+        self.node._inspection.confirmed_angle = 30.
+        with patch.object(self.node, '_inspection_execute') as execute, patch.object(self.node._mark_pub, 'publish') as mark:
+            self.assertIsNone(self.command('pump_mark'))
+            complete = execute.call_args.args[-1]
+            moving = rc(2000000, pwm=1000)
+            moving.channels[1] = 1750
+            self.node._rc_cb(moving)
+            complete(dict(success=True))
+            self.assertFalse(self.node._pump_active)
+            self.assertIsNone(self.node._inspection.confirmed_angle)
+            mark.assert_not_called()
+
+    def test_relative_mark_rejects_changed_confirmation_after_aim(self):
+        self.prepare_mark()
+        self.node._pose_at = self.node._odometry_at = 0.
+        self.node._inspection.confirmed_angle = 30.
+        with patch.object(self.node, '_inspection_execute') as execute, patch.object(self.node._mark_pub, 'publish') as mark:
+            self.assertIsNone(self.command('pump_mark'))
+            execute.call_args.args[-1](dict(success=True))
+            self.node._inspection.confirmed_angle = None
+            self.node._pump_tick(100., dict(servo_allowed=True))
+            self.assertFalse(self.node._pump_active)
+            mark.assert_not_called()
+
+    def test_mark_stops_sweep_and_waits_for_fresh_idle_before_aiming(self):
+        self.prepare_mark()
+        self.node._arm_state.update(sweeping=True, torque=True, lifecycle='MOVING')
+        with patch.object(self.node, '_inspection_execute') as execute, patch.object(self.node._arm_command_pub, 'publish') as arm:
+            self.assertIsNone(self.command('pump_mark'))
+            self.assertEqual(command_dict(arm.call_args.args[0])['action'], 'stop')
+            execute.assert_not_called()
+            self.node._pump_tick(100., dict(servo_allowed=True))
+            execute.assert_not_called()
+            self.node._arm_state.update(sweeping=False, torque=False, lifecycle='IDLE')
+            self.node._arm_state_at = 100.1
+            self.node._pump_tick(100.1, dict(servo_allowed=True))
+            execute.assert_called_once()
+            self.assertEqual(self.node._pump_output, 0.)
+
+    def test_mark_blocks_conflicting_arm_angle_and_requires_actual_nozzle_settle(self):
+        self.prepare_mark()
+        with patch.object(self.node, '_inspection_execute') as execute, patch.object(self.node._mark_pub, 'publish') as mark, patch.object(self.node._arm_command_pub, 'publish') as arm:
+            self.assertIsNone(self.command('pump_mark'))
+            self.assertEqual(self.command('arm_servo', role='arm', action='angle', angle_deg=90.)['type'], 'error')
+            arm.assert_not_called()
+            execute.call_args.args[-1](dict(success=True))
+            self.node._arm_state['position'] = 2500  # Successful result alone does not prove nozzle is on target.
+            self.node._pump_tick(100., dict(servo_allowed=True))
+            self.node._pump_tick(100.25, dict(servo_allowed=True))
+            mark.assert_not_called()
+            self.assertEqual(self.node._pump_output, 0.)
+            self.node._stop_pump(0.)
+
+    def test_mark_rejects_unreachable_or_unconfigured_target_without_spraying(self):
+        self.prepare_mark()
+        self.node._guidance_geometry['probe_radius_m'] = .5
+        with patch.object(self.node, '_inspection_execute') as execute:
+            self.assertEqual(self.command('pump_mark')['type'], 'error')
+            self.assertIsNotNone(self.node._guidance_target)  # Remains available for driving guidance.
+            self.assertEqual(self.node._pump_output, 0.)
+            execute.assert_not_called()
+            self.node._guidance_geometry = None
+            self.assertEqual(self.command('pump_mark')['type'], 'error')
+
+    def test_failed_cancelled_or_lost_control_mark_cannot_spray_later(self):
+        for cancel in ('failure', 'drive', 'lease', 'telemetry', 'timeout', 'settings', 'estop'):
+            with self.subTest(cancel=cancel):
+                self.prepare_mark()
+                with patch.object(self.node, '_inspection_execute') as execute, patch.object(self.node._mark_pub, 'publish') as publish:
+                    self.assertIsNone(self.command('pump_mark', request_id=cancel))
+                    complete = execute.call_args.args[-1]
+                    if cancel == 'failure':
+                        complete(dict(success=False, message='Motor fault'))
+                    elif cancel == 'drive':
+                        self.node._apply_drive_locked(.2, 0., True)
+                    elif cancel == 'lease':
+                        self.node.release(self.owner)
+                    elif cancel == 'estop':
+                        self.command('estop')
+                    elif cancel == 'settings':
+                        self.node._guidance_geometry = dict(self.node._guidance_geometry, probe_radius_m=.7)
+                        self.node._pump_tick(100., dict(servo_allowed=True))
+                    else:
+                        self.node._pump_tick(161. if cancel == 'timeout' else 101., dict(servo_allowed=True))
+                    complete(dict(success=True))  # Late completion after cancellation must be harmless.
+                    self.assertFalse(self.node._pump_active)
+                    self.assertEqual(self.node._pump_output, 0.)
+                    publish.assert_not_called()
+                self.output.reset_mock()
+
+    def test_missing_geometry_and_stale_inputs_cannot_invent_points(self):
+        self.setup_guidance()
+        self.assertIn('metal_x', self.node._mark_ground_point(100.))
+        self.node._guidance_geometry = None
+        self.assertEqual(self.node._mark_ground_point(100.), {})
+        self.setup_guidance()
+        self.assertEqual(self.node._mark_ground_point(101.), {})
+        self.node._inspection_detector['latest_peak']['pose'] = None
+        self.assertEqual(self.node._mark_ground_point(100.), {})
+
+    def test_stored_alignment_rechecks_target_and_only_moves_arm(self):
+        self.setup_guidance()
+        self.node._guidance_target = dict(id='mark', x=.866025403784, y=.5)
+        self.command('take_control')
+        with patch.object(self.node._arm_command_pub, 'publish') as publish:
+            self.assertIsNone(self.command('align_probe', stored_target_id='mark'))
+            self.assertAlmostEqual(command_dict(publish.call_args.args[0])['angle_deg'], 0., places=6)
+            publish.reset_mock()
+            self.assertEqual(self.command('align_probe', stored_target_id='old')['type'], 'error')
+            self.node._pose['x'] = 2.
+            self.assertEqual(self.command('align_probe', stored_target_id='mark')['type'], 'error')
+            publish.assert_not_called()
+        self.output.assert_not_called()
+
+    def test_odometry_reset_invalidates_target_and_prior_peak(self):
+        from nav_msgs.msg import Odometry
+        self.setup_guidance()
+        self.node._guidance_target = dict(id='mark', x=1., y=0.)
+        self.node._guidance_odom = ('odom', 5.)
+        message = Odometry()
+        message.header.frame_id = 'odom'
+        message.header.stamp.sec = 1
+        message.pose.pose.orientation.w = 1.
+        self.node._odometry_cb(message)
+        self.assertIsNone(self.node._guidance_target)
+        self.assertEqual(self.node._mark_ground_point(100.), {})
+
     def test_refresh_and_steal_preserve_completed_confirmation(self):
         self.command('take_control')
         workflow = self.node._inspection
@@ -131,20 +349,19 @@ class TeleopTest(unittest.TestCase):
         self.output.assert_called_with(.8, 0.)
         self.assertTrue(self.node.snapshot()['drive']['publishing'])
 
-    def test_mark_is_independent_of_odometry_and_probe_setup_but_rc_still_stops_it(self):
+    def test_aimed_mark_requires_odometry_but_manual_pump_remains_available(self):
         from test_rc_safety import rc, state
         from peaceofmine_operator.marking_settings import DEFAULTS
-        self.node._rc_safety.simulation=False
+        self.node._rc_safety.simulation = False
         self.node._state_cb(state())
         self.node._rc_cb(rc())
         self.node._marking_settings_cb(String(data=json.dumps(dict(marking=DEFAULTS))))
         self.command('take_control')
-        self.node._odometry_at=0.
-        self.node._probe_state={}
-        self.assertIsNone(self.command('pump_mark'))
-        self.node._drive_watchdog()
+        self.node._odometry_at = 0.
+        self.assertEqual(self.command('pump_mark')['type'], 'error')
+        self.assertIsNone(self.command('pump_manual', action='start', percent=32.))
         self.assertTrue(self.node._pump_active)
-        self.node._rc_cb(rc(2000000,pwm=2000))
+        self.node._rc_cb(rc(2000000, pwm=2000))
         self.assertFalse(self.node._pump_active)
         self.assertFalse(self.node._armed)
 

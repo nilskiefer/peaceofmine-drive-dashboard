@@ -95,6 +95,7 @@
             <div id="gnss-map" class="field-map" aria-label="Geographic field map"><span id="gnss-map-empty" class="map-empty meta">Waiting for GNSS position</span></div>
             <p id="gnss-map-status" class="meta">Waiting for field recorder</p>
             <canvas hidden id="map-view" aria-label="Local field map"></canvas>
+            <p class="meta"><span id="probe-guidance-status" role="status">Probe guide unavailable</span> <span class="tip" data-tip="Drive manually to bring the probe tip to the marked ground point. Guidance uses local odometry for this session. Amber is the mark; green is the probe. Align becomes available within 5 cm of the probe arc and inside arm limits."></span></p>
             <div class="section-foot"><p id="position">X 0.0 &middot; Y 0.0 &middot; heading 0&deg;</p></div>
           </section>
         </div>
@@ -251,8 +252,8 @@
               <small id="mode-probe-help" class="step-note"></small>
             </div>
             <div class="operation-action">
-              <button id="mode-mark-btn" type="button" class="mode-btn" disabled title="Run a timed marking shot">
-                <span class="mode-num">4</span><span class="mode-copy"><span class="mode-text">Mark ground</span><span class="mode-desc">Pump a mark onto the spot</span></span>
+              <button id="mode-mark-btn" type="button" class="mode-btn" disabled title="Aim the probe nozzle at the metal point, then spray">
+                <span class="mode-num">4</span><span class="mode-copy"><span class="mode-text">Mark ground <span class="tip" data-tip="The nozzle is at the probe tip. The arm aims it at the metal point and waits to settle before spraying. Drive manually until the target is within probe reach."></span></span><span class="mode-desc">Aim nozzle, then spray</span></span>
                 <span id="mode-mark-pill" class="badge neutral">WAITING</span>
               </button>
               <small id="mode-mark-help" class="step-note"></small>
@@ -499,6 +500,17 @@
               <button id="arm-probe-offset-save" type="button" class="primary" disabled>Save on car</button>
             </div>
             <p id="arm-probe-offset-status" class="status-msg" role="status">Waiting for car settings.</p>
+          </section>
+          <section class="set-card">
+            <header class="card-head"><h4>Probe geometry <span class="tip" data-tip="Measure the shared pivot from the body origin: X forward, Y left. Measure each radius from pivot to coil centre or probe tip, in metres. Save all four values before marking a ground point."></span></h4></header>
+            <div class="fields-2">
+              <label class="field"><span class="field-name">Pivot X <span class="unit">m</span></span><input id="guidance-pivot-x" type="number" step="any" required readonly></label>
+              <label class="field"><span class="field-name">Pivot Y <span class="unit">m</span></span><input id="guidance-pivot-y" type="number" step="any" required readonly></label>
+              <label class="field"><span class="field-name">Coil radius <span class="unit">m</span></span><input id="guidance-coil-radius" type="number" min="0" data-positive step="any" required readonly></label>
+              <label class="field"><span class="field-name">Probe radius <span class="unit">m</span></span><input id="guidance-probe-radius" type="number" min="0" data-positive step="any" required readonly></label>
+            </div>
+            <div class="card-actions"><button id="guidance-save" type="button" class="primary" disabled>Save on car</button></div>
+            <p id="guidance-settings-status" class="status-msg" role="status">Waiting for car settings.</p>
           </section>
           <section class="set-card">
             <header class="card-head"><h4>Probe scan</h4></header>
@@ -782,7 +794,7 @@
         </div>
         <div class="panel-grid cols-2">
           <section class="set-card">
-            <header class="card-head"><h4>Ground mark position <span class="tip" data-tip="The pump runs immediately. While the car is stationary it waits for a better fix, then keeps the best available position with its error."></span></h4></header>
+            <header class="card-head"><h4>Ground mark position <span class="tip" data-tip="Mark ground aims the probe nozzle and waits for the arm to settle before spraying. After spraying, the recorder waits for a better GNSS fix while stationary, then keeps the best available rover position with its error."></span></h4></header>
             <div class="fields-2">
               <label class="field"><span class="field-name">Maximum wait <span class="unit">s</span></span><input type="number" id="gnss-wait" min="0" max="120" step="any" required></label>
               <label class="field"><span class="field-name">Target accuracy <span class="unit">m</span></span><input type="number" id="gnss-target" min="0.01" max="100" step="any" required></label>

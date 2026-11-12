@@ -350,6 +350,9 @@ class DetectorNode(Node):
         self.pose_at = time.monotonic()
         if self.latest_peak:
             origin = self.latest_peak['pose']
+            if origin is None:
+                self.latest_peak = None
+                return
             distance = math.hypot(self.pose['x']-origin['x'], self.pose['y']-origin['y'])
             yaw_change = abs(math.atan2(math.sin(self.pose['yaw']-origin['yaw']), math.cos(self.pose['yaw']-origin['yaw'])))
             if distance > .05 or yaw_change > math.radians(2):
@@ -381,7 +384,7 @@ class DetectorNode(Node):
                 self.latest_peak = dict(
                     angle_deg=round(angle, 1),
                     signal=strength,
-                    timestamp=now, pose=pose or dict(self.pose)
+                    timestamp=now, pose=dict(pose) if pose is not None else None
                 )
         if rising and pose is not None:
             self.hits.append(dict(
