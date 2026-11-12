@@ -54,6 +54,7 @@ function createServoSettings(role) {
     loadChart.update('none');
   }
   let armHoldTimer = null;
+  let homeHoldId = null;
   let armSliderMoving = false;
   let armSliderDragging = false;
   let armSliderTarget = null;
@@ -103,6 +104,7 @@ function createServoSettings(role) {
     if (armHoldTimer !== null) {
       clearInterval(armHoldTimer);
       armHoldTimer = null;
+      homeHoldId = null;
       if (state.connected && state.drive.you_control_owner) armCommand('stop');
     }
   }
@@ -159,13 +161,23 @@ function createServoSettings(role) {
     $('arm-servo-details').textContent = servo.connected ? `Servo ${servo.servo_id} · ${servo.serial_port || 'serial adapter'}` : servo.serial_connected ? `Select the ID of the ${role} servo, then click Select servo.` : servo.serial_port ? `Servo bus: ${servo.serial_port}` : 'Servo bus unavailable. Check the hardware connection.';
     const number = (value, digits = 1, unit = '') => Number.isFinite(value) ? `${value.toFixed(digits)}${unit}` : '—';
     const metric = (id, value) => { $(id).textContent = servo.connected ? value : '—'; };
-    metric('arm-goal', armAngle(servo.goal_position));
+    const probe = role === 'probe' ? {...state.probe, ...live.probe} : {};
+    const mmPerTick = probe.mm_per_tick;
+    const homed = Number.isFinite(servo.home_position) && probe.homed !== false;
+    const depthKnown = role === 'probe' && state.connected && servo.connected && homed && Number.isFinite(mmPerTick) && mmPerTick > 0;
+    const depth = depthKnown && Number.isFinite(probe.depth_mm) ? probe.depth_mm : null;
+    const targetDepth = depthKnown && Number.isFinite(servo.goal_position)
+      ? (servo.reverse ? 1 : -1) * (servo.goal_position - servo.home_position) * mmPerTick
+      : depthKnown && Number.isFinite(probe.target_mm) ? probe.target_mm : null;
+    metric('arm-goal', role === 'probe' ? number(targetDepth, 1, ' mm') : armAngle(servo.goal_position));
     metric('arm-torque', typeof servo.torque === 'boolean' ? (servo.torque ? 'On' : 'Off') : '—');
     metric('arm-load', number(servo.load_percent, 1, ' %'));
     metric('arm-torque-limit', number(servo.torque_limit_percent, 1, ' %'));
     metric('arm-max-torque', number(servo.max_torque_percent, 1, ' %'));
     metric('arm-current', number(servo.current_a, 3, ' A'));
-    metric('arm-speed', `${number(servo.speed_deg_s, 1, '°/s')} / ${servo.speed_limit_deg_s === 0 ? 'Full speed' : number(servo.speed_limit_deg_s, 1, '°/s')}`);
+    metric('arm-speed', role === 'probe'
+      ? `${number(Number.isFinite(mmPerTick) && mmPerTick > 0 && Number.isFinite(servo.speed_deg_s) ? Math.abs(servo.speed_deg_s) * 4096 / 360 * mmPerTick : null, 1, ' mm/s')} / ${number(probe.speed_limit_mm_s, 1, ' mm/s')}`
+      : `${number(servo.speed_deg_s, 1, '°/s')} / ${servo.speed_limit_deg_s === 0 ? 'Full speed' : number(servo.speed_limit_deg_s, 1, '°/s')}`);
     metric('arm-moving', typeof servo.moving === 'boolean' ? (servo.moving ? 'Yes' : 'No') : '—');
     metric('arm-power', `${number(servo.voltage, 1, ' V')} / ${number(servo.temperature_c, 0, ' °C')}`);
     metric('arm-model', `${servo.model ?? '—'} / ${servo.firmware ?? '—'}`);
@@ -175,21 +187,25 @@ function createServoSettings(role) {
       : !owner ? 'Take control to configure the servo.'
       : live.torque ? 'Stop the active servo before changing the servo ID.'
       : !servo.serial_connected ? 'Waiting for the servo serial adapter.' : '';
-    $('arm-calibration-access').textContent = owner && active && state.drive.calibrating ? role === 'probe' ? 'Home, extend, then save measured travel.' : 'Jog, release, then record the limits.' : selectionBlocked || 'Select a servo to configure it.';
+    $('arm-calibration-access').textContent = owner && active && state.drive.calibrating ? role === 'probe' ? 'Home, hold Down, release, then save the current depth.' : 'Jog, release, then record the limits.' : selectionBlocked || 'Select a servo to configure it.';
     $('arm-take-control').hidden = owner;
     $('arm-take-control').disabled = !state.connected;
     $('arm-select-id').disabled = Boolean(selectionBlocked) || servoSelect.value === '';
     $('arm-select-id').title = selectionBlocked || 'Select the servo ID; position updates automatically.';
     const canRecord = owner && servo.connected && !servo.torque && armHoldTimer === null;
     if (role === 'probe') {
-      const probe = live.probe || {};
       const travel = (servo.reverse ? 1 : -1) * (servo.position - servo.home_position);
       const reverse = $('arm-reverse');
       reverse.disabled = !canRecord || Boolean(servo.moving || probe.active || probe.holding || probe.cycle_active || armPending) || typeof servo.reverse !== 'boolean';
       if (!directionPending) reverse.checked = servo.reverse === true;
-      $('arm-save-extension').disabled = !canRecord || directionPending || !Number.isFinite(servo.home_position) || !Number.isFinite(travel) || travel <= 3;
-      $('arm-extension-status').textContent = probe.calibrated
-        ? `Saved maximum: ${probe.max_depth_mm} mm · retained after restart` : 'Maximum extension not calibrated';
+      const probeBusy = Boolean(servo.moving || servo.homing || probe.active || probe.moving || probe.homing || probe.holding || probe.cycle_active);
+      $('arm-save-extension').disabled = !canRecord || Boolean(armPending) || probeBusy || !depthKnown || !Number.isFinite(depth) || depth <= 0 || !Number.isFinite(travel) || travel <= 3;
+      $('arm-home').disabled = !ready || Boolean(armPending && !homeHoldId) || (probeBusy && !homeHoldId);
+      $('arm-target-depth').textContent = number(targetDepth, 1, ' mm');
+      $('arm-extension-status').textContent = !Number.isFinite(mmPerTick) || mmPerTick <= 0
+        ? 'Measured travel conversion unavailable · restore probe calibration.'
+        : probe.calibrated && Number.isFinite(probe.max_depth_mm)
+          ? `Saved maximum: ${number(probe.max_depth_mm, 1, ' mm')} · retained after restart` : 'Maximum depth not saved';
       if ($('arm-max-extension').dataset.saved !== String(probe.max_depth_mm)) {
         $('arm-max-extension').value = probe.max_depth_mm || '';
         $('arm-max-extension').dataset.saved = String(probe.max_depth_mm);
@@ -198,8 +214,7 @@ function createServoSettings(role) {
       $('arm-position-mode').textContent = servo.connected ? servo.position_mode === 'multi-turn'
         ? 'Multi-turn · −7 to +7 shaft revolutions' : 'Joint mode · enable multi-turn for travel beyond one revolution' : 'Select probe to read position mode';
       $('arm-home-status').textContent = servo.connected ? servo.home_status || 'Not homed' : 'Not homed · connect probe';
-      $('arm-home-travel').textContent = servo.connected && Number.isFinite(servo.home_position)
-        ? `${(travel * 360 / 4096).toFixed(1)}° from top (shaft)` : 'Home required';
+      $('arm-home-travel').textContent = !homed ? 'Home required' : !depthKnown ? 'Calibration unavailable' : number(depth, 1, ' mm');
     }
     {
       $('arm-apply-motion').disabled = !canRecord;
@@ -210,15 +225,19 @@ function createServoSettings(role) {
         $('arm-apply-motion').dataset.profile = motionSignature;
       }
     }
-    $('arm-jog-left').disabled = $('arm-jog-right').disabled = !ready;
+    const probeJogBlocked = role === 'probe' && (!depthKnown || Boolean(servo.homing || probe.homing || probe.cycle_active || homeHoldId));
+    $('arm-jog-left').disabled = $('arm-jog-right').disabled = !ready || probeJogBlocked;
     const jogReason = !state.connected ? 'Dashboard disconnected'
       : !owner ? 'Take control first'
       : !servo.connected ? 'Servo not connected'
       : !state.safety?.servo_allowed ? state.safety?.servo_reason || 'RC blocks motion'
+      : role === 'probe' && !homed ? 'Home the probe first'
+      : role === 'probe' && !depthKnown ? 'Restore the measured travel conversion first'
+      : probeJogBlocked ? 'Wait for probe motion to finish'
       : armHoldTimer !== null ? 'Jog command held · release to stop'
       : role === 'probe' ? 'Ready · hold up to retract or down to extend' : 'Ready · hold left or right to move';
     $('arm-jog-status').textContent = jogReason;
-    $('arm-jog-status').dataset.ready = String(Boolean(ready));
+    $('arm-jog-status').dataset.ready = String(Boolean(ready && !probeJogBlocked));
     $('arm-jog-left').title = $('arm-jog-right').title = jogReason;
     if (role === 'arm') {
       const {captured, error} = armLimits(servo);
@@ -251,8 +270,8 @@ function createServoSettings(role) {
   }
   function initializeArmSettings() {
     if (role === 'probe') $('arm-save-extension').onclick = () => {
-      if (!$('arm-max-extension').reportValidity()) return;
-      armCommand('save_probe_extension', {max_extension_mm: Number($('arm-max-extension').value)});
+      if ($('arm-save-extension').disabled) return;
+      armCommand('save_probe_extension');
     };
     if (role === 'probe') $('arm-reverse').onchange = () => {
       armCommand('configure_direction', {enabled: $('arm-reverse').checked});
@@ -278,22 +297,38 @@ function createServoSettings(role) {
         if (button.disabled) return;
         stopArmMove();
         const selected = typeof values === 'function' ? values() : values;
-        if (action === 'jog' && (['arm-jog-speed'].some(id => !$(id).checkValidity() || !Number.isFinite(Number($(id).value)) || Number($(id).value) <= 0))) {
+        if (role === 'arm' && action === 'jog' && (['arm-jog-speed'].some(id => !$(id).checkValidity() || !Number.isFinite(Number($(id).value)) || Number($(id).value) <= 0))) {
           setArmFeedback('Enter a positive jog speed.', 'error'); return;
         }
         const held = {...selected, held: true};
+        if (action === 'home') {
+          const load = state.settings?.probe_stroke?.home_load_percent;
+          if (!Number.isFinite(load) || load < 10 || load > 60) {
+            setArmFeedback('Save a home load from 10% to 60% first.', 'error'); return;
+          }
+          homeHoldId = `${Date.now()}-${++servoRequestSequence}`;
+          held.hold_id = homeHoldId;
+          held.load_percent = load;
+        }
         armCommand(action, held);
         armHoldTimer = setInterval(() => armCommand(action, held, false), 80);
         updateArmSettings();
       };
       button.onpointerdown = event => { event.preventDefault(); button.setPointerCapture(event.pointerId); start(); };
-      button.onpointerup = stopArmMove;
+      const release = () => {
+        if (action !== 'home' || homeHoldId === null) { stopArmMove(); return; }
+        const holdId = homeHoldId;
+        clearInterval(armHoldTimer); armHoldTimer = null; homeHoldId = null;
+        if (state.connected && state.drive.you_control_owner) armCommand('home_release', {hold_id: holdId});
+      };
+      button.onpointerup = release;
       button.onpointercancel = button.onlostpointercapture = stopArmMove;
       button.onkeydown = event => { if ([' ', 'Enter'].includes(event.key) && !event.repeat) { event.preventDefault(); start(); } };
-      button.onkeyup = event => { if ([' ', 'Enter'].includes(event.key)) stopArmMove(); };
+      button.onkeyup = event => { if ([' ', 'Enter'].includes(event.key)) release(); };
       button.onblur = stopArmMove;
     }
-    const jogOptions = () => ({speed_deg_s: Number($('arm-jog-speed').value)});
+    const jogOptions = () => role === 'probe' ? {} : ({speed_deg_s: Number($('arm-jog-speed').value)});
+    if (role === 'probe') bindHold($('arm-home'), 'home', {});
     const leftDirection = role === 'arm' ? 1 : -1;
     bindHold($('arm-jog-left'), 'jog', () => ({direction:leftDirection, ...jogOptions()}));
     bindHold($('arm-jog-right'), 'jog', () => ({direction:-leftDirection, ...jogOptions()}));

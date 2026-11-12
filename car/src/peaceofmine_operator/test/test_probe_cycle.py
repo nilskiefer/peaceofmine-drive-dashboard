@@ -388,12 +388,45 @@ class ProbeCycleTest(unittest.TestCase):
         self.probe.start_action(SimpleNamespace(operation='home', speed=0., load_percent=15.))
         self.assertEqual(self.probe.start.call_args.kwargs['load'], 15.)
 
-    def test_slow_return_timeout_uses_both_legs_and_caps_motor_speed(self):
+    def test_slow_return_timeout_uses_both_legs_and_rejects_hidden_speed_clipping(self):
         self.probe.stroke_settings = lambda: dict(down_mm_s=200., retract_mm_s=.1, home_load_percent=10.)
+        with self.assertRaisesRegex(ValueError,'probe limit'):
+            self.probe.start_probe_cycle(120.)
+        self.probe.stroke_settings = lambda: dict(down_mm_s=20., retract_mm_s=.1, home_load_percent=10.)
         self.probe.start_probe_cycle(120.)
-        self.assertEqual(self.probe.operation.speed, self.probe.motion_speed)
+        self.assertLess(self.probe.operation.speed, self.probe.motion_speed)
         self.assertEqual(self.probe.return_speed, 1)
         self.assertGreater(self.probe.cycle_timeout, self.probe.travel_seconds(3000, 1))
+
+    def test_probe_holds_use_saved_linear_speeds_and_direction(self):
+        from peaceofmine_operator import probe_stroke
+        self.probe.saved={'probe_stroke':dict(down_mm_s=20.,retract_mm_s=30.,home_load_percent=10.)}
+        self.probe.launch_speed=73
+        self.probe.apply_stroke_limit()
+        self.probe.stroke_settings=lambda:self.probe.saved['probe_stroke']
+        self.assertGreater(self.probe.motion_speed,73)
+        down=dict(direction=-1,speed_deg_s=1.)
+        up=dict(direction=1,speed_deg_s=1.)
+        self.assertFalse(self.probe.special_command('jog',down))
+        self.assertFalse(self.probe.special_command('jog',up))
+        self.assertGreater(up['speed_deg_s'],down['speed_deg_s'])
+        factor=probe_stroke.units_per_mm_s(self.probe.extension)
+        self.assertAlmostEqual(int(down['speed_deg_s']/.684)/factor,20.,delta=.2)
+        self.assertAlmostEqual(int(up['speed_deg_s']/.684)/factor,30.,delta=.2)
+        self.probe.reverse=True
+        reverse=dict(direction=-1)
+        self.probe.special_command('jog',reverse)
+        self.assertEqual(reverse['direction'],1)
+        self.assertEqual(reverse['speed_deg_s'],down['speed_deg_s'])
+
+    def test_save_current_maximum_keeps_existing_mm_conversion(self):
+        self.probe.telemetry.position=3500
+        self.probe.telemetry.torque=False
+        self.probe.save=MagicMock()
+        self.probe.special_command('save_probe_extension',{})
+        value=self.probe.save.call_args.args[2]
+        self.assertEqual(value['travel_ticks'],500)
+        self.assertEqual(value['max_extension_mm'],20.)
 
     def test_sub_encoder_cycle_depth_is_rejected(self):
         with self.assertRaisesRegex(ValueError,'encoder tick'):

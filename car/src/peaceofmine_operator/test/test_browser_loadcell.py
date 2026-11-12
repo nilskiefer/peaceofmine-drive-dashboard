@@ -83,6 +83,32 @@ state.probe.loadcell.samples=[{x:-.3,raw_counts:1200200,filtered_counts:1200050}
 state.probe.history_time_s=102;frame();chart=draw();
 assert(chart.data.datasets[0].data[0].y===40 && chart.data.datasets[0].data[1].y===40 && chart.data.datasets[0].data[2].y===0,'filtered graph uses magnitude with legacy fallback');
 assert(chart.data.datasets[0].label.includes('filtered') && $('contact-live-volts').textContent.includes('filtered'),'filtered signal is identified');
+state.drive.armed=true;state.safety.servo_allowed=true;state.settings.probe_stroke={down_mm_s:20,retract_mm_s:30,home_load_percent:10};
+state.actuators={probe:{connected:true,serial_connected:true,servo_id:2,discovered_servos:[2],reverse:true,
+  position:2000,goal_position:2000,home_position:1000,position_minimum:-28672,position_maximum:28672,torque:false,moving:false,
+  probe:{homed:true,calibrated:true,depth_mm:25,target_mm:25,max_depth_mm:160,mm_per_tick:.025,speed_limit_mm_s:30}}};
+updateArmSettings();
+assert($('probe-servo-home-travel').textContent==='25.0 mm','current setup depth is mm');
+assert(!$('probe-servo-max-extension').getClientRects().length && !$('probe-servo-jog-speed').getClientRects().length,'legacy measured input and angular jog are hidden');
+$('probe-servo-save-extension').click();
+assert(sent.at(-1).action==='save_probe_extension' && !Object.hasOwn(sent.at(-1),'max_extension_mm'),'save captures current depth without manual distance');
+state.actuators.probe.last_command={request_id:sent.at(-1).request_id,success:true,message:'Saved'};updateArmSettings();
+$('probe-servo-home').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter'}));
+assert(sent.at(-1).action==='home' && sent.at(-1).held && sent.at(-1).load_percent===10 && sent.at(-1).hold_id,'Home is held with a unique identifier');
+const homeId=sent.at(-1).hold_id;
+$('probe-servo-home').dispatchEvent(new KeyboardEvent('keyup',{key:'Enter'}));
+assert(sent.at(-1).action==='home_release' && sent.at(-1).hold_id===homeId,'intentional Home release sets zero through the existing protocol');
+state.actuators.probe.last_command={request_id:sent.at(-1).request_id,success:true,message:'Homed'};updateArmSettings();
+$('probe-servo-jog-left').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter'}));
+assert(sent.at(-1).action==='jog' && sent.at(-1).direction===-1 && !Object.hasOwn(sent.at(-1),'speed_deg_s'),'Down uses car-owned linear speed');
+$('probe-servo-jog-left').dispatchEvent(new KeyboardEvent('keyup',{key:'Enter'}));
+assert(sent.at(-1).action==='stop','releasing Down stops motion');
+state.probe.contact_samples=[{x:-.2,depth_mm:25},{x:-.1,depth_mm:30}];state.probe.history_time_s=103;frame();
+$('manual-probe-history').getClientRects=()=>[{}];drawManualProbeHistory();
+const mainChart=Chart.getChart('manual-probe-history');
+assert(mainChart.options.scales.volts.title.text==='Contact (counts)' && mainChart.data.datasets[0].data[0].y===40,'main chart shows ESP32 filtered magnitude counts');
+const depthTrace=mainChart.data.datasets[2];
+assert((depthTrace._data || depthTrace.data).at(-1).y===30 && $('manual-probe-depth-value').textContent==='30.0 mm','main chart keeps measured depth and live mm readout');
 assert($('probe-pressure').textContent==='20.0%' && $('load-heading').textContent==='Motor load','motor diagnostic stays separate');
 state.probe.adc_contact_state.fresh=false;assert(operatorContactBlock(),'stale contact evaluation blocks probing');state.probe.adc_contact_state.fresh=true;
 state.probe.cycle_active=true;frame();assert($('loadcell-zero').disabled,'cannot zero during probe cycle');state.probe.cycle_active=false;

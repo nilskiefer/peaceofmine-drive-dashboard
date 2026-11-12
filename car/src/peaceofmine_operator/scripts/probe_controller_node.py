@@ -46,9 +46,11 @@ class ProbeController(ActuatorController):
         self.contact_volts = None
         self.last_probe_result = None
         super().__init__(**kwargs)
+        self.launch_speed = self.motion_speed
         self.extension = probe_calibration.load(self.config_file,self.simulation)
         self.apply_direction(self.saved.get('probe_direction', dict(reverse=False)))
         self.apply_probe_motion(self.saved.get('probe_motion',dict(max_speed_deg_s=self.motion_speed*.684,acceleration_deg_s2=34.332)))
+        self.apply_stroke_limit()
         self.contact = AdcContact()
         self.load_contact = ProbeContact()
         self.hold_target = True
@@ -86,6 +88,12 @@ class ProbeController(ActuatorController):
         self.extension=probe_calibration.load(self.config_file,self.simulation)
         if 'probe_motion' in self.saved:
             self.apply_probe_motion(self.saved['probe_motion'])
+        self.apply_stroke_limit()
+
+    def apply_stroke_limit(self):
+        if 'probe_motion' not in self.saved:
+            stroke = probe_stroke.validate(self.saved.get('probe_stroke',probe_stroke.DEFAULTS))
+            self.motion_speed = probe_stroke.motor_speed_limit(self.extension,stroke,self.launch_speed)
 
     def reload_contact(self):
         if self.settings.pending:
@@ -247,9 +255,14 @@ class ProbeController(ActuatorController):
         return probe_stroke.validate(saved.get('probe_stroke', probe_stroke.DEFAULTS))
 
     def stroke_speed(self, mm_per_second):
-        ticks_per_mm = self.extension['travel_ticks'] / self.extension['max_extension_mm']
-        units_per_mm_s = ticks_per_mm * (360 / (4096 * .684))
-        return max(1, round(min(self.motion_speed, mm_per_second * units_per_mm_s)))
+        units_per_mm_s = probe_stroke.units_per_mm_s(self.extension)
+        raw = mm_per_second*units_per_mm_s
+        if not math.isfinite(raw) or raw > self.motion_speed+.5:
+            raise ValueError(f'Requested speed exceeds the probe limit of {self.motion_speed/units_per_mm_s:.1f} mm/s')
+        requested = max(1,round(raw))
+        if requested > self.motion_speed:
+            raise ValueError(f'Requested speed exceeds the probe limit of {self.motion_speed/units_per_mm_s:.1f} mm/s')
+        return requested
 
     @staticmethod
     def travel_seconds(ticks, speed):
@@ -372,9 +385,17 @@ class ProbeController(ActuatorController):
         elif action == 'save_probe_extension':
             if self.operation or self.telemetry.torque or self.home_position is None:
                 raise ValueError('Wait for an encoder zero and release the motor before saving travel')
-            value = probe_calibration.validate(dict(servo_id=self.ident, max_extension_mm=command.get('max_extension_mm'),
-                travel_ticks=self.extension_sign*(self.telemetry.position-self.home_position)))
-            self.save(command, 'probe', value, lambda:setattr(self,'extension',value))
+            travel = self.extension_sign*(self.telemetry.position-self.home_position)
+            distance = command.get('max_extension_mm')
+            if distance is None:
+                if not self.extension or self.extension['servo_id'] != self.ident:
+                    raise ValueError('Restore measured probe travel before saving a depth in mm')
+                distance = travel*self.extension['max_extension_mm']/self.extension['travel_ticks']
+            value = probe_calibration.validate(dict(servo_id=self.ident, max_extension_mm=distance,travel_ticks=travel))
+            def apply_extension():
+                self.extension = value
+                self.apply_stroke_limit()
+            self.save(command, 'probe', value, apply_extension)
             return True
         elif action == 'zero_contact':
             if not self.interlock():
@@ -388,6 +409,14 @@ class ProbeController(ActuatorController):
             self.save(command, 'probe_direction', value, lambda:self.apply_direction(value))
             return True
         elif action == 'jog':
+            direction = command.get('direction')
+            if direction not in (-1,1):
+                raise ValueError('Invalid probe direction')
+            if self.home_position is None or not self.extension or self.extension['servo_id'] != self.ident:
+                raise ValueError('Home the probe and restore measured travel before moving in mm')
+            stroke = self.stroke_settings()
+            speed = self.stroke_speed(stroke['down_mm_s' if direction < 0 else 'retract_mm_s'])
+            command['speed_deg_s'] = (speed+.001)*.684
             if self.reverse and command.get('direction') in (-1, 1):
                 command['direction'] = -command['direction']
             return False
@@ -521,6 +550,13 @@ class ProbeController(ActuatorController):
         depth = self.extension_sign*(self.telemetry.position-self.home_position)*self.extension['max_extension_mm']/self.extension['travel_ticks'] if ready else None
         if depth is not None:
             self.depth_pub.publish(Float32(data=depth))
+        units = probe_stroke.units_per_mm_s(self.extension) if self.extension else None
+        stroke = probe_stroke.validate(self.saved.get('probe_stroke',probe_stroke.DEFAULTS))
+        def effective_speed(key):
+            if units is None:
+                return None
+            raw = min(self.motion_speed, max(1, round(min(1023,stroke[key]*units))))
+            return raw/units
         ratio = min(1., abs(self.telemetry.load_percent)/100) if self.connected() else None
         if ratio is not None:
             self.pressure_pub.publish(Float32(data=ratio))
@@ -546,6 +582,9 @@ class ProbeController(ActuatorController):
         return dict(reverse=self.reverse, sweep_acceleration_deg_s2=self.acceleration*8.583, home_position=self.home_position, home_status=self.home_status, homing=self.motion=='home',
             probe=dict(ready=ready, homed=self.home_position is not None, calibrated=bool(self.extension),
                 max_depth_mm=self.extension['max_extension_mm'] if self.extension else None,
+                mm_per_tick=self.extension['max_extension_mm']/self.extension['travel_ticks'] if self.extension else None,
+                speed_limit_mm_s=self.motion_speed/probe_stroke.units_per_mm_s(self.extension) if self.extension else None,
+                down_speed_mm_s=effective_speed('down_mm_s'), retract_speed_mm_s=effective_speed('retract_mm_s'),
                 depth_mm=depth, target_mm=self.target, active=self.motion=='target', moving=self.motion=='target' and self.lifecycle!='HOLDING', holding=self.lifecycle=='HOLDING',
                 cycle_active=self.cycle_active, cycle_phase=self.cycle_phase, cycle_target_depth=self.cycle_target_depth,
                 cycle_goal_id=(bytes(self.action_handle.goal_id.uuid).hex()

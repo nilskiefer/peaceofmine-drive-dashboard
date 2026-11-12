@@ -108,6 +108,25 @@ class ActuatorTest(unittest.TestCase):
         finally:
             self.probe.simulation = True
 
+    def test_probe_linear_speeds_reach_simulated_motor_register(self):
+        configuration.save_section(self.path,'probe_stroke',dict(down_mm_s=20.,retract_mm_s=30.,home_load_percent=10.))
+        self.driver.reload()
+        self.probe.reload_settings()
+        self.spin(.15)
+        self.assertEqual(self.driver.limits(self.probe.ident)[0],self.probe.motion_speed)
+        self.assertGreater(self.probe.motion_speed,73)
+        self.command(self.probe,action='jog',held=True,direction=-1)
+        self.spin(.12)
+        motor=self.driver.runtime.motors[self.probe.ident]
+        down=motor._applied_speed
+        self.assertEqual(down,self.probe.stroke_speed(20.))
+        self.command(self.probe,action='stop')
+        self.spin(.1)
+        self.command(self.probe,action='jog',held=True,direction=1)
+        self.spin(.12)
+        self.assertEqual(motor._applied_speed,self.probe.stroke_speed(30.))
+        self.assertGreater(motor._applied_speed,down)
+
     def test_manual_handoff_and_stale_input_do_not_abort_new_action(self):
         from unittest.mock import patch
         from peaceofmine_operator.actuator_protocol import command_message

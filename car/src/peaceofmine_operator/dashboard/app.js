@@ -2397,6 +2397,7 @@ function scrollTimeChart(chart, now, phase = 0) {
 
 let pressureSource = null, pressureReceivedAt = 0;
 let manualProbeChart = null;
+let manualProbeDepthSource = null, manualProbeDepthStamp = null, manualProbeDepthAt = 0;
 
 function drawManualProbeHistory(frameTime = performance.now(), animate = false) {
   const canvas = $('manual-probe-history');
@@ -2404,10 +2405,14 @@ function drawManualProbeHistory(frameTime = performance.now(), animate = false) 
   if (animate && manualProbeChart && scrollTimeChart(manualProbeChart, frameTime, 10)) return;
   const signal = window.operatorProbeVoltageHistory?.() ?? {data:[], limit:null, status:'Contact settings unavailable.'};
   const probe = state.probe;
-  // Both car histories share Unix timestamps. Older snapshots give an age at
-  // receipt, which still lets each measured encoder sample age off the plot.
-  const anchor = Number.isFinite(probe.history_time_s) && Number.isFinite(signal.time)
-    ? probe.history_time_s-signal.time : -(frameTime-pressureReceivedAt)/1000;
+  // Age each encoder batch from receipt, independently of the selected
+  // contact source, so missing readings leave gaps instead of freezing time.
+  if (probe.contact_samples !== manualProbeDepthSource || probe.history_time_s !== manualProbeDepthStamp) {
+    manualProbeDepthSource = probe.contact_samples;
+    manualProbeDepthStamp = probe.history_time_s;
+    manualProbeDepthAt = frameTime - Math.max(0, probe.history_age_s ?? 0) * 1000;
+  }
+  const anchor = -(frameTime - manualProbeDepthAt) / 1000;
   const depths = [];
   if (state.connected && Array.isArray(probe.contact_samples)) {
     for (const sample of probe.contact_samples) {
@@ -2431,7 +2436,8 @@ function drawManualProbeHistory(frameTime = performance.now(), animate = false) 
       options:{responsive:true,maintainAspectRatio:false,parsing:false,animation:false,
         plugins:{decimation:{enabled:true,algorithm:'min-max'},legend:{labels:{color:color('--muted'),boxWidth:10,font:{size:10}}},
           tooltip:{callbacks:{label:({dataset,parsed})=>dataset.label + ': ' +
-            (dataset.yAxisID === 'depth' ? parsed.y.toFixed(1) + ' mm' : parsed.y.toFixed(4) + ' V')}}},
+            (dataset.yAxisID === 'depth' ? parsed.y.toFixed(1) + ' mm'
+              : parsed.y.toFixed(manualProbeChart.$contactUnit === 'counts' ? 0 : 4) + ' ' + manualProbeChart.$contactUnit)}}},
         scales:{
           x:{type:'linear',min:-30,max:0,ticks:{maxTicksLimit:4,callback:v=>v===0?'now':v+'s'}},
           volts:{type:'linear',position:'left',title:{display:true,text:'Contact (V)'},ticks:{maxTicksLimit:4}},
@@ -2439,6 +2445,9 @@ function drawManualProbeHistory(frameTime = performance.now(), animate = false) 
         }},
     });
   }
+  const unit = signal.unit || 'V';
+  manualProbeChart.$contactUnit = unit;
+  canvas.setAttribute('aria-label', `Filtered contact and saved threshold in ${unit}, with measured encoder depth in millimetres over the last 30 seconds`);
   const [volts, limit, depth] = manualProbeChart.data.datasets;
   volts.label = signal.name ? `Filtered ${signal.name}` : 'Filtered contact';
   setSampleTrace(volts, signal.data, signal.gap ?? .5);
@@ -2447,10 +2456,14 @@ function drawManualProbeHistory(frameTime = performance.now(), animate = false) 
   // A gap or null sample breaks the line; no target or interpolated depth is plotted.
   setSampleTrace(depth, depths, .3);
   const axis = manualProbeChart.options.scales.volts;
+  axis.title.text = `Contact (${unit})`;
   axis.min = signal.bounds?.min;
   axis.max = signal.bounds?.max;
   const last = depths.at(-1);
-  const depthStatus = last && last.x >= -.5 && Number.isFinite(last.y) ? '' : 'Depth unavailable.';
+  const depthLive = last && last.x >= -.5 && Number.isFinite(last.y);
+  setText($('manual-probe-contact-value'), Number.isFinite(signal.value) ? `${signal.value.toFixed(unit === 'counts' ? 0 : 4)} ${unit}` : '—');
+  setText($('manual-probe-depth-value'), depthLive ? `${last.y.toFixed(1)} mm` : '—');
+  const depthStatus = depthLive ? '' : 'Depth unavailable.';
   const status = [signal.status, depthStatus].filter(Boolean).join(' ');
   setText($('manual-probe-status'), status);
   $('manual-probe-status').hidden = !status;

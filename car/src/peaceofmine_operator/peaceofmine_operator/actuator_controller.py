@@ -78,6 +78,8 @@ class ActuatorController(Node):
         try:
             saved=configuration.actuator_settings(self.config_file,self.simulation)
             keys=(self.role,self.role+'_motion',self.role+'_direction')
+            if self.role == 'probe':
+                keys += ('probe_stroke',)
             if any(saved.get(k)!=self.saved.get(k) for k in keys):
                 self.stop('Configuration changed; start again')
                 previous=self.ident

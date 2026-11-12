@@ -11,7 +11,7 @@ from mavros_msgs.msg import State, RCIn
 from std_msgs.msg import Bool, Float32
 from peaceofmine_interfaces.msg import ServoCommand, ServoState, ServoTelemetry
 from peaceofmine_interfaces.srv import ServoConfigure
-from peaceofmine_operator import configuration
+from peaceofmine_operator import configuration, probe_stroke
 from peaceofmine_operator.servo_transport import ArbotiX
 from peaceofmine_operator.servo_runtime import ServoRuntime, StaleServoCommand
 from peaceofmine_operator.servo_pid import apply_arm_pid
@@ -64,7 +64,7 @@ class ServoDriver(Node):
             if proposed != self.config:
                 if self.runtime and proposed.get('arm_pid') != self.config.get('arm_pid'):
                     self.disconnect('PID configuration changed; reconnecting stopped')
-                changed = any(proposed.get(k) != self.config.get(k) for k in ('arm','probe','arm_motion','probe_motion'))
+                changed = any(proposed.get(k) != self.config.get(k) for k in ('arm','probe','arm_motion','probe_motion','probe_stroke'))
                 if self.runtime and changed:
                     self.runtime.stop('aborted', 'Configuration changed; start again')
                 self.config = proposed
@@ -80,7 +80,11 @@ class ServoDriver(Node):
         acceleration = motion.get('acceleration_deg_s2', self.arm_acceleration if ident==arm else 34.332)
         if not all(type(x) in (float, int) and math.isfinite(x) for x in (speed, acceleration)):
             raise ValueError('Invalid saved motor limits')
-        return max(1, min(1023, math.floor(speed/.684+1e-9))), max(1, min(254, math.floor(acceleration/8.583+1e-9)))
+        limit = max(1, min(1023, math.floor(speed/.684+1e-9)))
+        if ident != arm and not motion:
+            limit = probe_stroke.motor_speed_limit(self.config.get('probe'),
+                probe_stroke.validate(self.config.get('probe_stroke',probe_stroke.DEFAULTS)),limit)
+        return limit, max(1, min(254, math.floor(acceleration/8.583+1e-9)))
 
     def allowed(self):
         return self.permission and time.monotonic()-self.permission_at < .3 and self.safety.servo_snapshot()['allowed']

@@ -129,7 +129,11 @@
               <button id="start-probing" type="button">Probe once</button>
             </div>
             <div class="section-head probe-trace-heading"><h3>Contact and depth</h3><span class="head-note">Last 30 s</span></div>
-            <div class="chart-box manual-probe-chart"><canvas id="manual-probe-history" role="img" aria-label="Filtered probe contact voltage and saved threshold in volts, with measured encoder depth in millimetres over the last 30 seconds"></canvas></div>
+            <div class="chart-box manual-probe-chart"><canvas id="manual-probe-history" role="img" aria-label="Filtered contact sensor readings and saved threshold, with measured encoder depth in millimetres over the last 30 seconds"></canvas></div>
+            <dl class="readouts inline" aria-label="Current probe readings">
+              <div><dt>Contact</dt><dd id="manual-probe-contact-value">—</dd></div>
+              <div><dt>Depth</dt><dd id="manual-probe-depth-value">—</dd></div>
+            </dl>
             <p id="manual-probe-chart-error" class="error-line" role="status" hidden></p>
             <p id="manual-probe-status" class="note">Waiting for probe readings.</p>
           </section>
@@ -571,8 +575,9 @@
           <p id="probe-servo-feedback" class="arm-feedback status-msg" role="status" aria-live="polite">Take control. The RC remote must allow motion.</p>
           <dl class="readouts inline">
             <div><dt>Motor</dt><dd id="probe-servo-servo-status">Waiting for driver</dd></div>
-            <div><dt>From top</dt><dd id="probe-servo-home-travel">—</dd></div>
-            <div><dt>Shaft</dt><dd id="probe-servo-servo-position">—</dd></div>
+            <div><dt>Current depth</dt><dd id="probe-servo-home-travel">—</dd></div>
+            <div hidden><dt>Motor position</dt><dd id="probe-servo-servo-position">—</dd></div>
+            <div><dt>Target depth</dt><dd id="probe-servo-target-depth">—</dd></div>
           </dl>
         </div>
         <section class="set-card card-inline">
@@ -584,7 +589,7 @@
         </section>
         <div class="panel-grid cols-2">
           <section class="set-card">
-            <header class="card-head"><h4>Probe motion <span class="tip" data-tip="Down and retract speeds apply to probe cycles and manual depth targets. The motor uses the nearest supported speed within its saved shaft speed limit."></span></h4></header>
+            <header class="card-head"><h4>Probe motion <span class="tip" data-tip="Down and retract speeds apply to probe cycles and manual depth targets. The motor uses the nearest supported speed within its saved speed limit. Hold controls use these saved speeds."></span></h4></header>
             <div class="fields-2">
               <label class="field"><span class="field-name">Down speed <span class="unit">mm/s</span></span><input id="probe-down-speed" type="number" min="0" step="any" data-positive required readonly></label>
               <label class="field"><span class="field-name">Retract speed <span class="unit">mm/s</span></span><input id="probe-retract-speed" type="number" min="0" step="any" data-positive required readonly></label>
@@ -592,20 +597,21 @@
             <label class="field"><span class="field-name">Automatic home load <span class="unit">%</span> <span class="tip" data-tip="During automatic homing, the probe retracts to the top and sets zero at this motor load."></span></span><input id="probe-servo-home-load" type="number" min="10" max="60" step="any" required readonly></label>
             <div class="card-actions"><button id="probe-stroke-save" type="button" class="primary" disabled>Save on car</button></div>
             <p id="probe-stroke-status" class="status-msg" role="status">Waiting for car settings.</p>
-            <p id="probe-servo-home-status" class="meta" role="status">Waiting for probe encoder</p>
           </section>
           <section class="set-card">
-            <header class="card-head"><h4><span class="step">2</span>Save the deepest point <span class="tip" data-tip="Jog down to the deepest safe point, measure from the top, enter it and save."></span></h4></header>
+            <header class="card-head"><h4><span class="step">2</span>Home <span class="tip" data-tip="Hold Home while the probe retracts to the top. Release at the top to set zero; automatic load detection also stops and sets zero. Stop releases the motor without setting zero."></span></h4></header>
+            <div class="card-actions"><button type="button" id="probe-servo-home">↑ Hold Home</button><p id="probe-servo-home-status" class="meta" role="status">Waiting for probe encoder</p></div>
+            <header class="card-head"><h4><span class="step">3</span>Save maximum depth <span class="tip" data-tip="After homing, hold Down to the deepest safe point, release, then save the current measured encoder depth. Depth uses the car’s saved travel conversion; no manual measurement is needed."></span></h4></header>
             <div class="hold-row">
               <button type="button" id="probe-servo-jog-left">↓ Hold down</button>
               <button type="button" id="probe-servo-jog-right">↑ Hold up</button>
             </div>
             <p id="probe-servo-jog-status" class="arm-jog-status status-msg" role="status">Jogging disabled</p>
-            <div class="fields-2">
+            <div class="fields-2" hidden>
               <label class="field"><span class="field-name">Jog speed <span class="unit">°/s</span></span><input id="probe-servo-jog-speed" type="number" step="any" value="50" required></label>
               <label class="field"><span class="field-name">Depth from top <span class="unit">mm</span></span><input id="probe-servo-max-extension" type="number" min="0.1" max="10000" step="any" required></label>
             </div>
-            <div class="card-actions"><button id="probe-servo-save-extension" type="button" class="primary">Save as deepest point</button><p id="probe-servo-extension-status" class="meta" role="status">Deepest point not saved</p></div>
+            <div class="card-actions"><button id="probe-servo-save-extension" type="button" class="primary">Save current position as max depth</button><p id="probe-servo-extension-status" class="meta" role="status">Deepest point not saved</p></div>
           </section>
         </div>
         <details class="set-more"><summary>Direction and travel mode</summary>
@@ -617,7 +623,7 @@
             </div>
           </div>
         </details>
-        <details class="set-more"><summary>Speed and acceleration</summary>
+        <details class="set-more" hidden><summary>Speed and acceleration</summary>
           <div class="set-more-body">
             <div class="inline-fields">
               <label class="field"><span class="field-name">Top speed <span class="unit">°/s</span></span><input id="probe-servo-max-speed" type="number" min="0.684" max="699.732" step="any" required></label>
@@ -630,7 +636,7 @@
           <div class="set-more-body diag-grid">
             <div class="diag-col">
               <table class="set-table kv" id="probe-servo-telemetry"><tbody>
-                <tr><th scope="row">Goal position</th><td id="probe-servo-goal">—</td></tr>
+                <tr><th scope="row">Target depth</th><td id="probe-servo-goal">—</td></tr>
                 <tr><th scope="row">Torque on</th><td id="probe-servo-torque">—</td></tr>
                 <tr><th scope="row">Estimated load</th><td id="probe-servo-load">—</td></tr>
                 <tr><th scope="row">Torque limit</th><td id="probe-servo-torque-limit">—</td></tr>
@@ -642,8 +648,8 @@
                 <tr><th scope="row">Model / firmware</th><td id="probe-servo-model">—</td></tr>
                 <tr><th scope="row">PX4 permission</th><td id="probe-servo-px4">—</td></tr>
               </tbody></table>
-              <label class="field" for="probe-servo-position-slider"><span class="field-name">Shaft angle target</span><output id="probe-servo-position-label">—</output></label>
-              <input id="probe-servo-position-slider" type="range" min="0" max="4095" step="1" value="0" disabled>
+              <label class="field" for="probe-servo-position-slider" hidden><span class="field-name">Shaft angle target</span><output id="probe-servo-position-label">—</output></label>
+              <input id="probe-servo-position-slider" type="range" hidden min="0" max="4095" step="1" value="0" disabled>
             </div>
             <div class="diag-chart">
               <p class="field-name">Estimated load · last 60 s <span class="tip" data-tip="The motor's own estimate, not a measured force."></span></p>

@@ -1,7 +1,22 @@
 """Car settings for calibrated probe travel and automatic homing."""
 import sys
+import math
 
 DEFAULTS = dict(down_mm_s=5., retract_mm_s=5., home_load_percent=10.)
+
+
+def units_per_mm_s(calibration):
+    """Convert linear speed using the existing measured encoder travel."""
+    return calibration['travel_ticks']/calibration['max_extension_mm'] * 360/(4096*.684)
+
+
+def motor_speed_limit(calibration, stroke, fallback):
+    if not calibration:
+        return fallback
+    requested = max(stroke['down_mm_s'], stroke['retract_mm_s']) * units_per_mm_s(calibration)
+    # Independent driver limit follows the saved linear speeds. The hardware
+    # maximum still applies, and zero must never reach the MX speed register.
+    return max(fallback, math.ceil(min(1023,requested)))
 
 
 def validate(value):

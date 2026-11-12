@@ -202,10 +202,19 @@ shared ArbotiX. Switching requires stopped motion. Reconnect while stopped to
 rescan after connecting a missing servo. Arm sweep calibration retains its
 three points, saved with **Save recorded limits** in `operator_config.json`.
 
-To calibrate **maximum extension**, start with the probe at the physical top when the encoder connects or let Confirm arc home it. Then jog down to the desired maximum extension, release, enter the measured travel
-from the top in millimetres, then choose **Save current position as maximum
-extension**. The saved distance and corresponding encoder span provide the
-millimetre conversion and travel limit for the main Probe slider.
+To set **maximum depth**, hold **Home** to retract to the top, then hold
+**Down** to the deepest safe position and release. Choose **Save current
+position as maximum depth**. Current and target depths are shown in mm; the
+existing measured encoder conversion is retained, with no separate distance
+entry. If that conversion is missing, restore the probe's measured travel
+calibration before setting a maximum in mm.
+
+The saved down/retract speeds apply to the hold buttons, depth targets and
+probe cycles. Without an explicit motor profile, the driver limit follows
+those linear speeds instead of silently imposing the old 73-unit shaft cap.
+Unsupported speeds are rejected with the available mm/s limit. The main
+Contact and depth graph shows the selected contact signal (ESP32 counts or
+ADC volts), its saved threshold and encoder depth, with current readings.
 
 Shared robot settings and hardware calibration live in **`src/peaceofmine_operator/operator_config.json`**:
 `arm` contains the servo ID and minimum/centre/maximum encoder positions;

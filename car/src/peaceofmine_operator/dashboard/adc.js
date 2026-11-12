@@ -509,7 +509,32 @@
   }
 
   window.operatorProbeVoltageHistory = () => {
-    if (state.settings?.probe_contact?.source === 'esp32') return {data:[],limit:null,status:'ESP32 load cell selected; view counts in Setup → Probe contact.'};
+    if (state.settings?.probe_contact?.source === 'esp32') {
+      const cell = state.probe?.loadcell, saved = state.settings.probe_contact;
+      const zeroed = cell?.zeroed && Number.isFinite(saved.zero_counts);
+      const elapsed = Math.max(0, (performance.now() - cellHistoryAt) / 1000);
+      const data = [];
+      if (state.connected && zeroed) for (const point of cellHistory) {
+        const x = point.x - elapsed;
+        if (!Number.isFinite(x) || x < -30 || x > 0) continue;
+        if (data.length && x - data.at(-1).x > .5) data.push({x:x-.001, y:null});
+        // Contact uses filtered magnitude from the saved zero; raw samples
+        // cannot stand in for missing filtered sensor measurements.
+        data.push({x, y:Number.isFinite(point.filtered_counts) ? Math.abs(point.filtered_counts - saved.zero_counts) : null});
+      }
+      const last = data.at(-1);
+      const live = state.connected && cell?.connected && cell.fresh && !cell.busy
+        && zeroed && last && last.x >= -.5 && Number.isFinite(last.y);
+      const limit = Number.isFinite(saved.threshold_counts) && saved.threshold_counts > 0 ? saved.threshold_counts : null;
+      const values = data.map(point => point.y).filter(Number.isFinite);
+      if (limit !== null) values.push(limit);
+      return {data, limit, unit:'counts', name:'ESP32 magnitude', enabled:true,
+        value:live ? last.y : null, gap:.5,
+        time:Number.isFinite(cellHistoryStamp) ? cellHistoryStamp + elapsed : undefined,
+        status:!zeroed ? 'Zero the unloaded ESP32 load cell in Setup → Probe contact.'
+          : !live ? 'ESP32 contact reading unavailable or stale.' : limit === null ? 'Contact threshold unavailable.' : '',
+        bounds:values.length ? signalBounds(Math.min(...values), Math.max(...values), 1) : {}};
+    }
     const trigger = latest?.probe_trigger;
     if (!trigger) return {data:[], limit:null, status:'Contact settings unavailable.'};
     const channel = channelAt(trigger.mux);
@@ -524,7 +549,8 @@
     else if (!channel?.enabled) status = 'Contact input disabled.';
     else if (!last || !Number.isFinite(last.y) || last.x < -gap) status = 'Contact voltage stale.';
     else if (limit === null) status = 'Contact threshold unavailable.';
-    return {data, limit, name:names[trigger.mux], enabled:trigger.enabled, status, time, gap,
+    return {data, limit, unit:'V', value:online && channel?.enabled && last && last.x >= -gap && Number.isFinite(last.y) ? last.y : null,
+      name:names[trigger.mux], enabled:trigger.enabled, status, time, gap,
       bounds:adcAxis(null, 'filtered_volts', limit, trigger.mux)};
   };
   function render() {
