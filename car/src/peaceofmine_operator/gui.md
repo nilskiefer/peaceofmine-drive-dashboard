@@ -209,8 +209,22 @@ existing measured encoder conversion is retained, with no separate distance
 entry. If that conversion is missing, restore the probe's measured travel
 calibration before setting a maximum in mm.
 
-The saved down/retract speeds apply to the hold buttons, depth targets and
-probe cycles. Without an explicit motor profile, the driver limit follows
+The saved speeds apply to the hold buttons, depth targets and probe cycles.
+**Down speed** controls extension. **Fast retract** applies beyond 10 mm from
+home; the probe brakes at a 10 mm waypoint, then uses **Slow retract** to reach
+home. Initial homing always uses Slow retract. The driver derives acceleration
+from the requested speeds and measured travel unless an explicit motor profile
+is saved, and sends a fixed endpoint so short moving goals do not keep braking
+the motor.
+
+**Contact slowdown** applies during ESP32 downward motion. The speed divisor is
+`max(1, factor × abs(filtered_counts − zero_counts) / threshold_counts)`, capped
+at the saved factor. With factor 3, half the threshold gives 1/1.5 speed and the
+threshold gives 1/3 speed. Factor 1 disables slowing. Contact still ends descent
+and triggers retraction; stale readings still stop extension. The minimum motor
+speed is one register unit.
+
+Without an explicit motor profile, the driver limit follows
 those linear speeds instead of silently imposing the old 73-unit shaft cap.
 Unsupported speeds are rejected with the available mm/s limit. The main
 Contact and depth graph shows the selected contact signal (ESP32 counts or
@@ -370,8 +384,35 @@ uses the even pass count saved under Setup → Metal detector (2 by default) at 
 local noise and compares their measured half-height footprints. A majority must share at least 50% overlap and include both sweep directions.
 The result averages their forward and return median centers. The probe scan uses the point count and spacing from Setup → Arm (default 7 points at 10° over ±30°), clipped to the saved arm limits and corrected for the detector/probe
 mounting offset saved under Setup → Arm (default 30°). To calibrate from an existing scan, subtract the arm angle that physically centered the probe from the confirmed detector bearing. Each new scan uses the saved offset for all its points. The scan map labels the confirmed bearing and the commanded arm center. Each completed marker shows measured contact depth or the configured target depth reached. A dash indicates an unavailable depth. Contact or maximum depth ends each descent; the probe retracts
-before the next angle. In Setup → Probe, **Down speed** and **Retract speed** set the two stroke speeds in mm/s (both default to 5). Automatic homing uses the retract speed once travel is calibrated. **Automatic home load** sets the motor load that establishes zero at the top (10% by default). Stop inspection cancels the sequence while retaining the
+before the next angle. In Setup → Probe, **Down speed**, **Fast retract**, and **Slow retract** set the stroke speeds in mm/s (default 5). Slow retract applies within 10 mm from home and during initial homing. **Automatic home load** sets the motor load that establishes zero at the top (10% by default). Stop inspection cancels the sequence while retaining the
 dashboard control lease. Global STOP and RC/session loss cancel outstanding goals.
+
+The **Manual** button next to Probe scan runs without a confirmed detector arc.
+It homes, then probes the full calibrated arm range using the saved point spacing,
+including both endpoints. The point count follows the range and spacing; other
+motion, ownership and contact safety requirements remain in effect.
+
+Mission recording is automatic while the operator stack runs, independent of
+browser connections. Each search sweep and manual probe scan marks a new run with
+settings and software provenance. Files are appended under
+`car/src/peaceofmine_operator/mission-sessions/mission-*.jsonl` alongside the selected
+configuration file. Mission log offers **Download JSONL**, **Full CSV**, and the
+existing **Summary CSV**. Clearing the summary retains full recordings. The API
+`/api/mission-session?format=jsonl` (or `csv`) downloads the latest session; add
+`filename=mission-<session>.jsonl` to select an earlier one.
+
+Records capture UTC receipt time with nanoseconds, host monotonic time and ROS
+clock time, retaining original source timestamps for GNSS, ADC, motor and ESP32
+samples. The Pi clock must be synchronized for absolute UTC accuracy; monotonic
+time preserves ordering across wall-clock adjustments. Logs include settings
+changes, Git commit/describe/tag and dirty state supplied by `util/run`, GNSS fix
+quality, odometry, drive commands, RC state, detector readings, raw/filtered ADC
+and load-cell samples, motor telemetry, probe phases/results/points and failures.
+A 10 Hz state snapshot includes source ages so stale readings can be recognized.
+Contact is recorded in ADC counts and motor load percent, without claiming a
+calibrated force. Full CSV includes nested payload and complete record JSON.
+Writes run on a separate thread; critical events and at least each second are
+flushed to disk. Recording errors or dropped records appear in Mission log.
 
 The Probe panel exposes maximum depth and the saved Above/Below contact limit in
 volts. This changes the configured probe input's threshold, not its raw samples.

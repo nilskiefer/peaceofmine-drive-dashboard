@@ -40,6 +40,16 @@ class InspectionTest(unittest.TestCase):
         self.assertEqual(self.flow.phase,'CONFIRMED')
         self.assertEqual(self.flow.confirmed_angle,3.)
 
+    def test_manual_scan_uses_full_calibrated_range_without_an_arc(self):
+        with self.assertRaisesRegex(ValueError,'Confirm'):
+            self.flow.probe(-25.,28.,80.)
+        self.flow.probe(-25.,28.,80.,dict(point_count=5,spacing_deg=10.),full_range=True)
+        self.assertIsNone(self.flow.confirmed_angle)
+        self.assertEqual(self.flow.probe_scan_mode,'manual')
+        self.assertEqual(list(self.flow.queue),[('home',0.)]+[
+            item for angle in (-25.,-15.,-5.,5.,15.,25.,28.) for item in [('position',angle),('probe',80.)]])
+        self.assertEqual(self.flow.total,7)
+
     def test_two_opposed_passes_compute_center(self):
         self.confirm()
         targets=[c.args[2] for c in self.execute.call_args_list]

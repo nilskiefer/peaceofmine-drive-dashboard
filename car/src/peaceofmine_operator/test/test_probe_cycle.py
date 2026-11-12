@@ -91,6 +91,11 @@ class ProbeCycleTest(unittest.TestCase):
         self.probe.motion = None
         self.probe.lifecycle = 'IDLE'
 
+    def complete_retract_waypoint(self):
+        if self.probe.retract_boundary:
+            self.probe.telemetry.position=self.probe.telemetry.goal=self.probe.operation.target
+            self.probe.update_behavior()
+
     def loadcell_input(self, counts):
         from peaceofmine_operator.adc_contact import AdcContact
         self.probe.contact = AdcContact()
@@ -118,7 +123,7 @@ class ProbeCycleTest(unittest.TestCase):
         self.assertTrue(self.probe.contact_detected)
         self.assertEqual(self.probe.contact_depth_mm, 20.)
         self.assertIsNone(self.probe.contact_volts)
-        self.assertEqual(self.probe.operation.target, self.probe.home_position)
+        self.assertEqual(self.probe.operation.target, 3750)
 
     def test_loadcell_loss_aborts_instead_of_using_adc(self):
         self.loadcell_input(0.)
@@ -238,10 +243,11 @@ class ProbeCycleTest(unittest.TestCase):
         self.assertTrue(self.probe.contact_detected)
         self.assertAlmostEqual(self.probe.contact_depth_mm, 45.0, delta=0.5)
         self.assertEqual(self.probe.cycle_phase, 'RETRACTING')
-        # Target should now be home (4000)
-        self.assertEqual(self.probe.operation.target, 4000)
+        # Brake at the 10 mm waypoint, then continue slowly home.
+        self.assertEqual(self.probe.operation.target, 3750)
 
         # While retracting, probe moves back to top
+        self.complete_retract_waypoint()
         self.probe.telemetry.goal = self.probe.home_position
         self.probe.telemetry.position = 4000 # confirmed home encoder position
         self.probe.update_behavior()
@@ -273,6 +279,7 @@ class ProbeCycleTest(unittest.TestCase):
         self.assertIsNone(self.probe.contact_depth_mm)
 
         # Returns to stow
+        self.complete_retract_waypoint()
         self.probe.telemetry.position = 4000
         self.probe.telemetry.goal = self.probe.home_position
         self.probe.update_behavior()
@@ -290,6 +297,7 @@ class ProbeCycleTest(unittest.TestCase):
         self.probe.update_behavior()
         self.assertFalse(self.probe.contact_detected)
         self.assertEqual(self.probe.cycle_phase, 'RETRACTING')
+        self.complete_retract_waypoint()
         self.probe.telemetry.position = self.probe.telemetry.goal = self.probe.home_position
         self.probe.update_behavior()
         self.assertEqual(self.probe.last_probe_result['status'], 'CLEAR')
@@ -345,6 +353,7 @@ class ProbeCycleTest(unittest.TestCase):
     def test_reversed_cycle_descends_and_returns_home(self):
         self.probe.apply_direction(dict(reverse=True))
         self.probe.home_position=1000
+        self.probe.telemetry.position=1000
         self.probe.start_probe_cycle(1.)
         self.assertEqual(self.probe.operation.target,1025)
         self.probe.update_behavior()

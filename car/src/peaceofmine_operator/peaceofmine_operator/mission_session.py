@@ -15,7 +15,7 @@ import time
 import uuid
 
 
-HISTORY_KEYS = {'samples','history','pressure_samples','contact_samples','trail','sweep_samples'}
+HISTORY_KEYS = {'samples','history','pressure_samples','contact_samples','trail','sweep_samples','recent_points'}
 
 
 def clean(value, histories=True):
@@ -142,7 +142,7 @@ def export_chunks(path,format):
     if format=='csv':
         writer.writerow(['timestamp_utc','monotonic_ns','session_id','run_id','kind',
             'latitude','longitude','horizontal_accuracy_m','probe_depth_mm','probe_contact_counts',
-            'detector_volts','event','payload_json'])
+            'detector_volts','event','payload_json','record_json'])
     with Path(path).open('rb') as handle:
         end=os.fstat(handle.fileno()).st_size
         while handle.tell()<end:
@@ -156,11 +156,16 @@ def export_chunks(path,format):
                 snapshot=payload.get('snapshot',payload if record['kind']=='telemetry' else {})
                 probe=snapshot.get('probe',{}).get('probe',{})
                 detector=snapshot.get('detector',{}).get('detector',{})
+                packet=detector.get('sensor',{}).get('packet') or {}
+                detector_volts=detector.get('filtered_volts')
+                if detector_volts is None and packet.get('filtered_adc') is not None:
+                    detector_volts=packet['filtered_adc']*detector.get('sensor',{}).get('reference_voltage',3.3)/255
                 location=record.get('location') or {}
                 writer.writerow([record.get('timestamp_utc'),record.get('monotonic_ns'),record.get('session_id'),
                     record.get('run_id'),record.get('kind'),location.get('latitude'),location.get('longitude'),
                     location.get('horizontal_accuracy_m'),probe.get('depth_mm'),probe.get('loadcell',{}).get('net_counts'),
-                    detector.get('filtered_volts'),payload.get('event'),json.dumps(payload,separators=(',',':'))])
+                    detector_volts,payload.get('event'),json.dumps(payload,separators=(',',':')),
+                    json.dumps(record,separators=(',',':'))])
             if buffer.tell()>=65536:
                 yield buffer.getvalue().encode('utf-8');buffer.seek(0);buffer.truncate()
     if buffer.tell():yield buffer.getvalue().encode('utf-8')

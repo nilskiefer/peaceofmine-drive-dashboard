@@ -9,8 +9,11 @@ import uuid
 
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
-from sensor_msgs.msg import NavSatFix
-from std_msgs.msg import Bool, String
+from sensor_msgs.msg import NavSatFix, Joy
+from nav_msgs.msg import Odometry
+from geometry_msgs.msg import Twist, TwistWithCovarianceStamped
+from mavros_msgs.msg import RCIn, State
+from std_msgs.msg import Bool, String, Float32
 from peaceofmine_interfaces.msg import AdcSamples, ServoState, ServoCommand, ActuatorCommand
 from rosidl_runtime_py.convert import message_to_ordereddict
 
@@ -61,10 +64,13 @@ class FieldRecorder(Node):
                 ('detector/telemetry','detector'),('adc/state','adc'),
                 ('power/state','power'),('cameras/state','cameras')):
             self.create_subscription(String,topic,lambda msg,name=source:self.telemetry(msg,name),1)
-        for topic in ('operator/result','arm/result','probe/result','operator/settings/result','operator/command'):
+        for topic in ('operator/result','arm/result','probe/result','operator/settings/result','operator/command',
+                      'detector/control_state','detector/state','adc/command_result'):
             self.create_subscription(String,topic,lambda msg,name=topic:self.source_event(msg,name),20)
-        for message,topic in ((AdcSamples,'adc/filtered_samples'),(ServoState,'servo/state'),
-                (ServoCommand,'servo/command'),(ActuatorCommand,'arm/command'),(ActuatorCommand,'probe/command')):
+        for message,topic in ((AdcSamples,'adc/samples'),(AdcSamples,'adc/filtered_samples'),(ServoState,'servo/state'),
+                (ServoCommand,'servo/command'),(ActuatorCommand,'arm/command'),(ActuatorCommand,'probe/command'),
+                (Odometry,'odometry/local'),(Twist,'cmd_vel'),(TwistWithCovarianceStamped,'mavros/local_position/velocity_local'),
+                (RCIn,'mavros/rc/in'),(State,'mavros/state'),(Joy,'joy'),(Float32,'actuation/pump_percent')):
             self.create_subscription(message,topic,lambda msg,name=topic:self.raw_telemetry(msg,name),qos_profile_sensor_data)
         self.create_timer(.1,self.analysis_tick)
         self.create_timer(.5, self.tick)
@@ -193,7 +199,7 @@ class FieldRecorder(Node):
             for sample in cell.get('samples',[]):
                 stamp=sample.get('sample_ms')
                 if type(stamp) is not int:continue
-                if self.loadcell_cursor is not None and not 0 < (stamp-self.loadcell_cursor)&0xffffffff < 0x80000000:continue
+                if self.loadcell_cursor is not None and not 0 < ((stamp-self.loadcell_cursor)&0xffffffff) < 0x80000000:continue
                 samples.append(sample);self.loadcell_cursor=stamp
             if samples:
                 self.session.write('loadcell',dict(session=self.loadcell_session,

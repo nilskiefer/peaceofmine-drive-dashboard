@@ -30,7 +30,8 @@ class FieldTransportTest(unittest.TestCase):
         self.addCleanup(os.close, slave)
         with tempfile.TemporaryDirectory() as directory:
             args = ['--ros-args', '-r', '__ns:=/field_test_' + str(os.getpid()), '-p',
-                    'gnss_device:=' + os.ttyname(slave), '-p', 'field_log_path:=' + directory + '/field.db']
+                    'gnss_device:=' + os.ttyname(slave), '-p', 'field_log_path:=' + directory + '/field.db',
+                    '-p', 'config_file:=' + directory + '/config.json']
             rclpy.init(args=args)
             try:
                 receiver = module.FieldRecorder()
