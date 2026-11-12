@@ -1,9 +1,9 @@
 {
   "arm": {
     "servo_id": 1,
-    "minimum": 511,
+    "minimum": 943,
     "center": 1514,
-    "maximum": 2555
+    "maximum": 2013
   },
   "probe": {
     "servo_id": 2,
@@ -11,23 +11,26 @@
     "travel_ticks": 5430
   },
   "metal_detector": {
-    "baseline_adc": 36.040017,
-    "full_response_adc": 105.000024,
+    "baseline_adc": 127.27697699999999,
+    "full_response_adc": 127.5,
     "reference_voltage": 5.0
   },
   "schema_version": 1,
-  "revision": 19,
+  "revision": 35,
   "section_revisions": {
-    "arm": 14,
-    "adc": 4,
-    "driving": 19,
-    "cameras": 8,
+    "arm": 29,
+    "adc": 33,
+    "driving": 35,
+    "cameras": 30,
     "probe_direction": 10,
     "inspection": 17,
-    "metal_detector": 16
+    "metal_detector": 27,
+    "probe_stroke": 31,
+    "probe_guidance": 32
   },
   "adc": {
     "config": {
+      "filter_ms": 100,
       "bus": 1,
       "address": 72,
       "rate": 128,
@@ -104,7 +107,7 @@
     "probe_trigger": {
       "enabled": true,
       "mux": 4,
-      "level": 1,
+      "level": 2,
       "direction": "above",
       "hysteresis": 0,
       "debounce_ms": 0
@@ -146,5 +149,16 @@
   },
   "inspection": {
     "passes": 2
+  },
+  "probe_stroke": {
+    "down_mm_s": 10.0,
+    "retract_mm_s": 10.0,
+    "home_load_percent": 10.0
+  },
+  "probe_guidance": {
+    "pivot_x_m": 0.3,
+    "pivot_y_m": 0.3,
+    "coil_radius_m": 0.35,
+    "probe_radius_m": 0.35
   }
 }
