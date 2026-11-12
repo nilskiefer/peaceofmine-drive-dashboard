@@ -16,7 +16,7 @@
     "reference_voltage": 5.0
   },
   "schema_version": 1,
-  "revision": 35,
+  "revision": 50,
   "section_revisions": {
     "arm": 29,
     "adc": 33,
@@ -26,7 +26,8 @@
     "inspection": 17,
     "metal_detector": 27,
     "probe_stroke": 31,
-    "probe_guidance": 32
+    "probe_guidance": 32,
+    "probe_contact": 50
   },
   "adc": {
     "config": {
@@ -162,8 +163,8 @@
     "probe_radius_m": 0.35
   },
   "probe_contact": {
-    "source": "adc",
+    "source": "esp32",
     "threshold_counts": null,
-    "zero_counts": null
+    "zero_counts": -1255369
   }
 }
