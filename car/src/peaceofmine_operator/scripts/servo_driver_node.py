@@ -82,9 +82,12 @@ class ServoDriver(Node):
             raise ValueError('Invalid saved motor limits')
         limit = max(1, min(1023, math.floor(speed/.684+1e-9)))
         if ident != arm and not motion:
-            limit = probe_stroke.motor_speed_limit(self.config.get('probe'),
-                probe_stroke.validate(self.config.get('probe_stroke',probe_stroke.DEFAULTS)),limit)
-        return limit, max(1, min(254, math.floor(acceleration/8.583+1e-9)))
+            stroke=probe_stroke.validate(self.config.get('probe_stroke',probe_stroke.DEFAULTS))
+            limit = probe_stroke.motor_speed_limit(self.config.get('probe'),stroke,limit)
+            acceleration_units=probe_stroke.motor_acceleration_limit(self.config.get('probe'),stroke)
+        else:
+            acceleration_units=max(1, min(254, math.floor(acceleration/8.583+1e-9)))
+        return limit, acceleration_units
 
     def allowed(self):
         return self.permission and time.monotonic()-self.permission_at < .3 and self.safety.servo_snapshot()['allowed']

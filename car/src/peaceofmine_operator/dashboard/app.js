@@ -758,6 +758,20 @@ window.operatorFieldLog = entries => {
   renderTargetLog();
 };
 
+window.operatorMissionRecording = recording => {
+  const status = $('mission-recording-status');
+  if (!recording || typeof recording !== 'object') {
+    status.textContent = 'Waiting for session log.';
+    return;
+  }
+  const parts = [];
+  if (recording.error) parts.push(`Recording error: ${recording.error}`);
+  else if (recording.filename || recording.session_id) parts.push(`Recording: ${recording.filename || recording.session_id}`);
+  if (Number.isFinite(recording.rows)) parts.push(`${recording.rows} rows`);
+  if (Number.isFinite(recording.dropped) && recording.dropped > 0) parts.push(`${recording.dropped} dropped`);
+  status.textContent = parts.join(' · ') || 'Waiting for session log.';
+};
+
 function logTime(stamp) {
   return typeof stamp === 'number' ? new Date(stamp * 1000).toLocaleString() : stamp;
 }
@@ -784,8 +798,10 @@ function renderTargetLog() {
     const position = Number.isFinite(entry.latitude) && Number.isFinite(entry.longitude)
       ? `${entry.latitude.toFixed(6)}, ${entry.longitude.toFixed(6)} · ${quality} · ${accuracy}`
       : Number.isFinite(entry.x) && Number.isFinite(entry.y) ? `(${entry.x.toFixed(2)}, ${entry.y.toFixed(2)})` : '—';
+    const contact = Number.isFinite(entry.contact_counts) ? `${entry.contact_counts} counts`
+      : Number.isFinite(entry.contact_volts) ? `${entry.contact_volts.toFixed(4)} V` : '';
     for (const value of [String(entry.id).slice(0, 8), position, Number.isFinite(entry.detector_volts) ? entry.detector_volts.toFixed(4) : '',
-                         entry.contact_depth_mm ?? '—', Number.isFinite(entry.contact_volts) ? entry.contact_volts.toFixed(4) : '', [entry.status, entry.latitude == null && entry.gps_status && quality].filter(Boolean).join(' · '), logTime(entry.timestamp)]) {
+                         entry.contact_depth_mm ?? '—', contact, [entry.status, entry.latitude == null && entry.gps_status && quality].filter(Boolean).join(' · '), logTime(entry.timestamp)]) {
       row.insertCell().textContent = value;
     }
   }
@@ -794,8 +810,8 @@ function renderTargetLog() {
 
 function exportTargetLogCsv() {
   if (!targetLog.length) return;
-  const header = ['ID', 'X (m)', 'Y (m)', 'Heading (deg)', 'Filtered detector (V)', 'Contact depth (mm)', 'Filtered probe sensor (V)', 'Status', 'Timestamp', 'Latitude', 'Longitude', 'Horizontal error (m)', 'GNSS status'];
-  const rows = targetLog.map(t => [t.id, t.x ?? '', t.y ?? '', t.heading_deg ?? '', t.detector_volts ?? '', t.contact_depth_mm ?? '', t.contact_volts ?? '', t.status, t.timestamp, t.latitude ?? '', t.longitude ?? '', t.horizontal_accuracy_m ?? '', t.gps_status ?? '']);
+  const header = ['ID', 'X (m)', 'Y (m)', 'Heading (deg)', 'Filtered detector (V)', 'Contact depth (mm)', 'Filtered probe sensor (V)', 'Status', 'Timestamp', 'Latitude', 'Longitude', 'Horizontal error (m)', 'GNSS status', 'contact_counts', 'contact_source', 'contact_threshold_counts', 'telemetry_json'];
+  const rows = targetLog.map(t => [t.id, t.x ?? '', t.y ?? '', t.heading_deg ?? '', t.detector_volts ?? '', t.contact_depth_mm ?? '', t.contact_volts ?? '', t.status, t.timestamp, t.latitude ?? '', t.longitude ?? '', t.horizontal_accuracy_m ?? '', t.gps_status ?? '', t.contact_counts ?? '', t.contact_source ?? '', t.contact_threshold_counts ?? '', t.telemetry == null ? '' : JSON.stringify(t.telemetry)]);
   const csv = [header.join(','), ...rows.map(row => row.map(value => '"' + String(value).replaceAll('"', '""') + '"').join(','))].join('\n');
   const blob = new Blob([csv], {type: 'text/csv;charset=utf-8;'});
   const url = URL.createObjectURL(blob);
@@ -804,6 +820,15 @@ function exportTargetLogCsv() {
   a.download = `peaceofmine-targets-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.csv`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function downloadMissionSession(format) {
+  const a = document.createElement('a');
+  a.href = '/api/mission-session?' + new URLSearchParams({format});
+  a.download = '';
+  a.target = '_blank';
+  a.rel = 'noopener';
+  a.click();
 }
 
 function markCurrentPose() {
@@ -1011,6 +1036,18 @@ function alignProbeToPeak() {
 }
 
 function inspectionBlock(action) {
+  if (action === 'manual_probe_scan') {
+    const blocked = probeActionBlock() || armSetupBlock() || window.operatorContactBlock?.();
+    if (blocked) return blocked;
+    const arm = state.actuators?.arm;
+    if (!Number.isFinite(arm?.position)) return 'Wait for fresh arm position readings.';
+    if (state.detector.sweep_enabled || arm.moving || arm.sweeping) return 'Stop the arm before starting a manual scan.';
+    if (state.probe.moving || state.probe.homing || state.actuators?.probe?.moving || state.actuators?.probe?.homing)
+      return 'Stop probe before starting another action.';
+    const contact = state.probe.adc_contact_state;
+    if (!contact?.enabled || !contact.fresh) return 'Save a contact limit and wait for a fresh reading.';
+    return '';
+  }
   const blocked = operationBlock(true) || armSetupBlock();
   if (blocked) return blocked;
   if (action === 'confirm') return state.detector.fresh === true ? '' : 'Wait for fresh detector readings before confirming.';
@@ -1025,7 +1062,7 @@ function startInspection(action) {
   const blocked = inspectionBlock(action);
   if (blocked) { showNotice(blocked); return; }
   const command = {type: 'inspection', action};
-  if (action === 'probe_scan') {
+  if (['probe_scan', 'manual_probe_scan'].includes(action)) {
     command.depth_mm = savedProbeMaximum();
   }
   stopInput();
@@ -1079,14 +1116,17 @@ function renderProbeScanMap(inspection, points) {
   const plan = Array.isArray(inspection.probe_angles_deg) && inspection.probe_angles_deg.length
     ? inspection.probe_angles_deg : Array.from({length:oldCount}, (_, i) => points[i]?.angle_deg);
   const label = probePlanLabel(plan.length, recordedProbeSpacing(inspection), inspection.scan_point_count);
-  const clipped = clippedProbeEdges(inspection.probe_angles_deg, inspection.probe_target_bearing_deg,
-                                    inspection.scan_point_count, inspection.scan_spacing_deg);
+  const clipped = inspection.probe_scan_mode === 'manual' ? ''
+    : clippedProbeEdges(inspection.probe_angles_deg, inspection.probe_target_bearing_deg,
+                        inspection.scan_point_count, inspection.scan_spacing_deg);
   $('probe-map-plan').textContent = clipped ? label.replace('° spacing', '° requested') + ' · ' + clipped : label;
   const results = $('probe-map-readings');
   const target = inspection.probe_target_depth_mm;
-  const bearing = inspection.probe_target_bearing_deg ?? inspection.confirmed_angle_deg;
+  const bearing = inspection.probe_scan_mode === 'manual' ? inspection.probe_target_bearing_deg
+    : inspection.probe_target_bearing_deg ?? inspection.confirmed_angle_deg;
   const angleLabel = value => Number.isFinite(value) ? `${Number(value.toFixed(3))}°` : '—';
   $('probe-map-centers').hidden = !plan.length;
+  $('probe-map-bearing-label').textContent = inspection.probe_scan_mode === 'manual' ? 'Range center' : 'Target bearing';
   $('probe-map-bearing').textContent = angleLabel(bearing);
   $('probe-map-arm-center').textContent = angleLabel(inspection.probe_arm_center_deg);
   $('probe-map-depth').textContent = Number.isFinite(target) ? `Target depth ${Number(target.toFixed(1))} mm` : '';
@@ -1226,12 +1266,13 @@ function renderInspection() {
   $('inspection-stop').hidden = !inspection.active;
   $('mode-sweep-btn').dataset.active = String(state.detector.sweep_enabled);
   $('mode-align-btn').dataset.active = String(phase === 'CONFIRMING');
-  $('mode-probe-btn').dataset.active = String(phase === 'PROBING');
+  $('mode-probe-btn').dataset.active = String(phase === 'PROBING' && inspection.probe_scan_mode !== 'manual');
+  $('mode-manual-probe-btn').dataset.active = String(phase === 'PROBING' && inspection.probe_scan_mode === 'manual');
   const points = Array.isArray(inspection.points) ? inspection.points : [];
   $('inspection-points').parentElement.hidden = !points.length;
   const returning = returningProbePoint(inspection, probe);
   const mapPoints = returning ? [...points, returning] : points;
-  const key = JSON.stringify([mapPoints, inspection.probe_angles_deg, inspection.probe_target_depth_mm, inspection.probe_target_bearing_deg, inspection.probe_arm_center_deg, inspection.confirmed_angle_deg, inspection.total, inspection.scan_spacing_deg, inspection.scan_point_count, phase]);
+  const key = JSON.stringify([mapPoints, inspection.probe_angles_deg, inspection.probe_target_depth_mm, inspection.probe_target_bearing_deg, inspection.probe_arm_center_deg, inspection.confirmed_angle_deg, inspection.total, inspection.scan_spacing_deg, inspection.scan_point_count, inspection.probe_scan_mode, phase]);
   if (key === inspectionPointsKey) return;
   inspectionPointsKey = key;
   renderProbeScanMap(inspection, mapPoints);
@@ -1312,12 +1353,14 @@ function updateHud() {
   const sweepBlock = otherActionBlock || armSetupBlock();
   const confirmBlock = inspectionBlock('confirm');
   const scanBlock = inspectionBlock('probe_scan');
+  const manualScanBlock = inspectionBlock('manual_probe_scan');
   $('operation-help').textContent = otherActionBlock || 'Drive with step 1 on until the detector reacts, stop, then run steps 2 to 4. STOP halts everything.';
   const shownBlocks = new Set([otherActionBlock]);
   for (const [id, reason] of [['mode-sweep-help', sweepBlock], ['mode-align-help', confirmBlock],
-    ['mode-probe-help', scanBlock], ['mode-mark-help', markBlock], ['probe-cycle-help', scanBlock]]) {
+    ['mode-probe-help', scanBlock], ['mode-manual-probe-help', manualScanBlock],
+    ['mode-mark-help', markBlock], ['probe-cycle-help', scanBlock]]) {
     const text = reason && !shownBlocks.has(reason) ? reason : '';
-    $(id).textContent = text;
+    $(id).textContent = text && id === 'mode-manual-probe-help' ? 'Manual: ' + text : text;
     $(id).hidden = !text;
     if (text) shownBlocks.add(text);
   }
@@ -1334,14 +1377,19 @@ function updateHud() {
   $('mode-probe-btn').disabled = Boolean(scanBlock);
   const scan = state.inspection;
   const scanSettings = state.settings?.probe_scan;
-  const scanLabel = scan.phase === 'PROBING'
+  const confirmedScanRunning = scan.phase === 'PROBING' && scan.probe_scan_mode !== 'manual';
+  const manualScanRunning = scan.phase === 'PROBING' && scan.probe_scan_mode === 'manual';
+  const scanLabel = confirmedScanRunning
     ? probePlanLabel(scan.probe_angles_deg?.length || scan.total, recordedProbeSpacing(scan), scan.scan_point_count)
     : probePlanLabel(scanSettings?.point_count, scanSettings?.spacing_deg);
   const scanDescription = scanLabel || 'Probe the planned positions around the hit';
   setText($('mode-probe-btn').querySelector('.mode-desc'), scanDescription);
   $('mode-probe-btn').title = scanBlock || scanDescription;
-  $('mode-probe-btn').querySelector('.mode-text').textContent = state.inspection.phase === 'PROBING' ? (probe.cycle_active && probe.cycle_phase === 'RETRACTING' ? 'Retracting…' : 'Probe scan running') : 'Probe scan';
-  $('mode-probe-pill').textContent = state.inspection.phase === 'PROBING' ? 'RUNNING' : scanBlock ? 'BLOCKED' : 'READY';
+  $('mode-probe-btn').querySelector('.mode-text').textContent = confirmedScanRunning ? (probe.cycle_active && probe.cycle_phase === 'RETRACTING' ? 'Retracting…' : 'Probe scan running') : 'Probe scan';
+  $('mode-probe-pill').textContent = confirmedScanRunning ? 'RUNNING' : scanBlock ? 'BLOCKED' : 'READY';
+  $('mode-manual-probe-btn').disabled = Boolean(manualScanBlock);
+  $('mode-manual-probe-btn').textContent = manualScanRunning ? 'Manual…' : 'Manual';
+  $('mode-manual-probe-btn').title = manualScanBlock || 'Probe the full saved arm range at the saved spacing and maximum depth, without confirming an arc';
   renderInspection();
   const inspectionStatus = state.inspection.phase !== 'IDLE';
   const scanStatus = $('inspection-status');
@@ -1903,13 +1951,16 @@ for (const [id, type, field] of [['probe-slider', 'probe_target', 'depth_mm'], [
 if ($('detector-align-probe')) $('detector-align-probe').onclick = alignProbeToPeak;
 if ($('start-probing')) $('start-probing').onclick = startProbeCycle;
 if ($('mode-probe-btn')) $('mode-probe-btn').onclick = () => startInspection('probe_scan');
+if ($('mode-manual-probe-btn')) $('mode-manual-probe-btn').onclick = () => startInspection('manual_probe_scan');
 if ($('mode-sweep-btn')) $('mode-sweep-btn').onclick = () => send({type: 'sweep_enabled', enabled: !state.detector.sweep_enabled});
 if ($('mode-align-btn')) $('mode-align-btn').onclick = () => startInspection('confirm');
 $('inspection-stop').onclick = () => send({type: 'inspection', action: 'stop'});
 if ($('mode-mark-btn')) $('mode-mark-btn').onclick = triggerPumpMark;
 if ($('mark-target-btn')) $('mark-target-btn').onclick = markCurrentPose;
 if ($('export-target-log')) $('export-target-log').onclick = exportTargetLogCsv;
-if ($('clear-target-log')) $('clear-target-log').onclick = () => { if (state.drive.you_control_owner && targetLog.length && confirm('Clear the mission log on the car for every viewer?')) send({type:'clear_log'}); };
+if ($('download-mission-jsonl')) $('download-mission-jsonl').onclick = () => downloadMissionSession('jsonl');
+if ($('download-mission-csv')) $('download-mission-csv').onclick = () => downloadMissionSession('csv');
+if ($('clear-target-log')) $('clear-target-log').onclick = () => { if (state.drive.you_control_owner && targetLog.length && confirm('Clear the mission summary entries on the car for every viewer? Full session recordings will be retained.')) send({type:'clear_log'}); };
 
 let displaySignature = '';
 function applyDisplaySettings(value) {
@@ -3039,6 +3090,11 @@ function armSetupForm({section, fields, save, status, describe, invalid, applies
       if (input.hasAttribute('data-positive'))
         input.setCustomValidity(input.valueAsNumber <= 0 ? 'Enter a value greater than zero.' : '');
     }
+    if (section === 'probe_stroke') {
+      const slow = $('probe-retract-slow-speed');
+      if (slow.valueAsNumber > $('probe-retract-speed').valueAsNumber)
+        slow.setCustomValidity('Slow retract must not exceed fast retract.');
+    }
     const valid = inputs.every(([, input]) => Number.isFinite(input.valueAsNumber) && input.validity.valid);
     const changed = editable && (!available || inputs.some(([key, input]) => input.valueAsNumber !== saved[key]));
     button.disabled = !owner || !editable || Boolean(pending) || !valid || !changed;
@@ -3110,10 +3166,10 @@ const armSetupForms = new Map([
     save:'arm-probe-offset-save', status:'arm-probe-offset-status', describe:saved => `${saved.offset_deg}°`,
     invalid:'Enter an offset from −180° to 180°.', applies:'Applies to the next aim or probe scan.'})],
   ['probe_stroke', armSetupForm({section:'probe_stroke',
-    fields:{down_mm_s:'probe-down-speed', retract_mm_s:'probe-retract-speed', home_load_percent:'probe-servo-home-load'},
+    fields:{down_mm_s:'probe-down-speed', retract_mm_s:'probe-retract-speed', retract_slow_mm_s:'probe-retract-slow-speed', contact_slowdown_factor:'probe-contact-slowdown-factor', home_load_percent:'probe-servo-home-load'},
     save:'probe-stroke-save', status:'probe-stroke-status',
-    describe:saved => `${saved.down_mm_s} mm/s down, ${saved.retract_mm_s} mm/s up and ${saved.home_load_percent}% home load`,
-    invalid:'Enter positive speeds and a home load from 10% to 60%.', applies:'Applies to the next probe movement.'})],
+    describe:saved => `${saved.down_mm_s} mm/s down, ${saved.retract_mm_s} mm/s fast retract, ${saved.retract_slow_mm_s} mm/s slow retract, ${saved.contact_slowdown_factor}× contact slowdown and ${saved.home_load_percent}% home load`,
+    invalid:'Enter positive speeds with slow retract no faster than fast retract, contact slowdown of at least 1×, and a home load from 10% to 60%.', applies:'Applies to the next probe movement.'})],
   ['probe_scan', armSetupForm({section:'probe_scan', fields:{point_count:'arm-scan-count', spacing_deg:'arm-scan-spacing'},
     save:'arm-scan-save', status:'arm-scan-status', describe:saved => `${saved.point_count} points at ${saved.spacing_deg}° spacing`,
     invalid:'Enter 1–31 whole points and spacing from 0.1° to 180°.', applies:'Applies to the next probe scan.', preview:showScanCoverage})],

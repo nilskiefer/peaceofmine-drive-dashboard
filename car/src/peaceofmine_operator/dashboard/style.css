@@ -660,6 +660,10 @@ body[data-search-alert=active] #mode-align-btn:not(:disabled) { border-color: va
 .task-workbench > .section-head { min-height: var(--control-h-sm); }
 .workflow-buttons { display: grid; gap: var(--s2); }
 .operation-action { display: grid; gap: var(--s1); }
+.probe-scan-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--s2); }
+.probe-scan-actions .mode-btn { min-width: 0; grid-template-areas: "num text text" "num desc badge"; gap: var(--s1) var(--s2); }
+#mode-manual-probe-btn { padding: 0 var(--s2); }
+#mode-manual-probe-btn[data-active=true] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-text); }
 .mode-btn {
   display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "num text badge" "num desc desc";
   align-items: center; gap: .1rem var(--s3);
@@ -724,6 +728,8 @@ body[data-search-alert=active] #mode-align-btn:not(:disabled) { border-color: va
     min-height: var(--control-h); padding: var(--s1) var(--s2); gap: var(--s2);
   }
   .task-workbench .mode-desc { display: none; }
+  .task-workbench .probe-scan-actions .mode-btn { grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "num text" "num badge"; gap: 0 var(--s2); }
+  .task-workbench .probe-scan-actions .badge { justify-self: start; font-size: var(--fs-xs); }
   .task-workbench .workflow-status { padding: var(--s1) var(--s2); }
   .task-workbench .task-controls { padding-top: var(--s2); }
   .task-workbench .task-controls[open] > summary { margin-bottom: var(--s2); }

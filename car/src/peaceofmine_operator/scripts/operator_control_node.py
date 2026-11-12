@@ -319,7 +319,7 @@ class OperatorControl(Node):
 
     def _start_inspection(self, payload):
         action = payload.get('action')
-        if action not in ('confirm', 'probe_scan'):
+        if action not in ('confirm', 'probe_scan','manual_probe_scan'):
             raise ValueError('Unknown inspection action')
         if self._inspection.active:
             raise ValueError('An inspection is already running')
@@ -342,7 +342,7 @@ class OperatorControl(Node):
             self._inspection.confirm(lower, upper, self._inspection_detector.get('sweep_speed_deg_s'),
                                      self._confirmation_passes, home_probe=bool(self._probe_state.get('connected')))
         else:
-            if self._inspection.confirmed_angle is None:
+            if action == 'probe_scan' and self._inspection.confirmed_angle is None:
                 raise ValueError('Confirm a detection before starting the probe scan')
             probe = self._probe_state.get('probe', {})
             depth = probe.get('max_depth_mm')
@@ -358,7 +358,7 @@ class OperatorControl(Node):
             if not self._inspection_clients['probe'].server_is_ready():
                 raise ValueError('Probe action server unavailable')
             self._stop_motion_locked(stop_inspection=False, for_inspection=True)
-            self._inspection.probe(lower, upper, depth, self._probe_pattern)
+            self._inspection.probe(lower, upper, depth, self._probe_pattern,full_range=action=='manual_probe_scan')
         self._stop_until = time.monotonic()+STOP_TAIL_S
         self._publish_twist(0., 0.)
 

@@ -20,6 +20,17 @@ class ProbeCycleTest(unittest.TestCase):
         self.probe.reverse = False
         self.probe.extension_sign = -1
         self.probe.home_hold = None
+        self.probe.retract_boundary = False
+        self.probe.final_depth_target = 0.
+        self.probe.manual_direction = None
+        self.probe.held_key = None
+        self.probe.retired_holds = set()
+        self.probe.down_speed = None
+        self.probe.contact_slowdown_factor = 1.
+        self.probe.current_slowdown = 1.
+        self.probe.contact_settings = dict(source="adc", threshold_counts=None)
+        self.probe.contact_counts = None
+        self.probe.reply = MagicMock()
         self.probe.ident = 2
         self.probe.home_position = 4000
         self.probe.telemetry = MagicMock()
@@ -84,7 +95,7 @@ class ProbeCycleTest(unittest.TestCase):
         from peaceofmine_operator.adc_contact import AdcContact
         self.probe.contact = AdcContact()
         self.probe.contact.configure(dict(enabled=True, mux=0, level=50., direction='above', hysteresis=5., debounce_ms=0.))
-        self.probe.contact_settings = dict(source='esp32',zero_counts=1000)
+        self.probe.contact_settings = dict(source='esp32',zero_counts=1000,threshold_counts=50.)
         self.probe.contact_config_valid = True
         self.probe.simulation = False
         self.probe.loadcell = MagicMock()
@@ -321,9 +332,10 @@ class ProbeCycleTest(unittest.TestCase):
         self.assertEqual(self.probe.start.call_args.args[1:],(1000,4000))
         self.probe.operation=None
         self.probe.motion=None
-        command=dict(direction=-1)
-        self.assertFalse(self.probe.special_command('jog',command))
-        self.assertEqual(command['direction'],1)
+        command=dict(direction=-1,held=True,hold_id='reversed')
+        self.assertTrue(self.probe.special_command('jog',command))
+        self.assertEqual(self.probe.operation.target,4000)
+        self.probe.stop()
         self.probe.telemetry.position=1500
         self.probe.telemetry.torque=False
         self.probe.save=MagicMock()
@@ -384,7 +396,7 @@ class ProbeCycleTest(unittest.TestCase):
     def test_automatic_home_uses_saved_load_and_retract_speed(self):
         from types import SimpleNamespace
         self.probe.start_action(SimpleNamespace(operation='home', speed=0., load_percent=0.))
-        self.assertEqual(self.probe.start.call_args.kwargs, dict(speed=26, load=20., autonomous=True))
+        self.assertEqual(self.probe.start.call_args.kwargs, dict(speed=16, load=20., autonomous=True))
         self.probe.start_action(SimpleNamespace(operation='home', speed=0., load_percent=15.))
         self.assertEqual(self.probe.start.call_args.kwargs['load'], 15.)
 
@@ -405,19 +417,44 @@ class ProbeCycleTest(unittest.TestCase):
         self.probe.apply_stroke_limit()
         self.probe.stroke_settings=lambda:self.probe.saved['probe_stroke']
         self.assertGreater(self.probe.motion_speed,73)
-        down=dict(direction=-1,speed_deg_s=1.)
-        up=dict(direction=1,speed_deg_s=1.)
-        self.assertFalse(self.probe.special_command('jog',down))
-        self.assertFalse(self.probe.special_command('jog',up))
-        self.assertGreater(up['speed_deg_s'],down['speed_deg_s'])
         factor=probe_stroke.units_per_mm_s(self.probe.extension)
-        self.assertAlmostEqual(int(down['speed_deg_s']/.684)/factor,20.,delta=.2)
-        self.assertAlmostEqual(int(up['speed_deg_s']/.684)/factor,30.,delta=.2)
-        self.probe.reverse=True
-        reverse=dict(direction=-1)
-        self.probe.special_command('jog',reverse)
-        self.assertEqual(reverse['direction'],1)
-        self.assertEqual(reverse['speed_deg_s'],down['speed_deg_s'])
+        self.probe.special_command('jog',dict(direction=-1,held=True,hold_id='down'))
+        self.assertAlmostEqual(self.probe.operation.speed/factor,20.,delta=.2)
+        self.assertEqual(self.probe.start.call_args.kwargs['lead'],3000)
+        self.probe.telemetry.position=2000
+        self.probe.special_command('jog',dict(direction=1,held=True,hold_id='up'))
+        self.assertAlmostEqual(self.probe.operation.speed/factor,30.,delta=.2)
+        self.assertEqual(self.probe.operation.target,3750)
+        renewed=self.probe.command_at
+        self.probe.update_behavior()
+        self.assertEqual(self.probe.command_at,renewed,'Manual hold must still expire without a new command')
+
+    def test_retraction_brakes_at_ten_mm_before_slow_home_leg(self):
+        self.probe.stroke_settings=lambda:dict(down_mm_s=20.,retract_mm_s=8.,retract_slow_mm_s=2.,home_load_percent=20.)
+        self.probe.telemetry.position=2000
+        self.probe.start_target(0.)
+        self.assertEqual(self.probe.operation.target,3750)
+        self.assertEqual(self.probe.operation.speed,26)
+        self.probe.telemetry.position=3750
+        self.probe.update_behavior()
+        self.assertEqual(self.probe.operation.target,4000)
+        self.assertEqual(self.probe.operation.speed,6)
+        self.assertEqual(self.probe.operation.operation_id,'op1')
+
+    def test_loadcell_slowdown_matches_requested_factor_without_affecting_retract(self):
+        self.loadcell_input(0.)
+        self.probe.contact_settings['threshold_counts']=1500000.
+        self.probe.stroke_settings=lambda:dict(down_mm_s=20.,retract_mm_s=8.,retract_slow_mm_s=2.,home_load_percent=20.,contact_slowdown_factor=3.)
+        self.probe.start_target(100.)
+        normal=self.probe.operation.speed
+        for counts,multiplier in ((0.,1.),(750000.,1.5),(1499999.,3.)):
+            self.probe.contact.snapshot=MagicMock(return_value=dict(enabled=True,fresh=True,detected=False,value=counts))
+            self.probe.update_behavior()
+            self.assertAlmostEqual(self.probe.operation.speed,round(normal/multiplier),delta=1)
+        self.probe.telemetry.position=2000
+        self.probe.start_target(0.)
+        self.probe.update_behavior()
+        self.assertEqual(self.probe.operation.speed,26)
 
     def test_save_current_maximum_keeps_existing_mm_conversion(self):
         self.probe.telemetry.position=3500

@@ -83,6 +83,20 @@ else
 fi
 
 # Image to run
+# The source mount excludes .git; preserve the host revision in automatic logs.
+if command -v git >/dev/null 2>&1; then
+    OPERATOR_LOG_COMMIT="$(git -C "$BUILD_CONTEXT" rev-parse HEAD 2>/dev/null)"
+    OPERATOR_LOG_DESCRIBE="$(git -C "$BUILD_CONTEXT" describe --tags --always --dirty 2>/dev/null)"
+    OPERATOR_LOG_BRANCH="$(git -C "$BUILD_CONTEXT" branch --show-current 2>/dev/null)"
+    OPERATOR_LOG_DIRTY="false"
+    if [ -n "$(git -C "$BUILD_CONTEXT" status --porcelain 2>/dev/null)" ]; then
+        OPERATOR_LOG_DIRTY="true"
+    fi
+    append ARGS -e "OPERATOR_GIT_COMMIT=$OPERATOR_LOG_COMMIT" \
+        -e "OPERATOR_GIT_DESCRIBE=$OPERATOR_LOG_DESCRIBE" \
+        -e "OPERATOR_GIT_BRANCH=$OPERATOR_LOG_BRANCH" \
+        -e "OPERATOR_GIT_DIRTY=$OPERATOR_LOG_DIRTY"
+fi
 append ARGS \
     "$IMAGE_TAG"
 

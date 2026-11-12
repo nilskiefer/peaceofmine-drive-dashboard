@@ -58,6 +58,7 @@ class InspectionWorkflow:
         self.probe_arm_center = None
         self.scan_offset = None
         self.scan_pattern = None
+        self.probe_scan_mode = 'confirmed'
         self.arc_overlap = None
         self.queue = deque()
         self.pending = None
@@ -76,6 +77,7 @@ class InspectionWorkflow:
                     completed=self.completed, total=self.total, progress=self.progress,
                     confirmed_angle_deg=self.confirmed_angle, arc_overlap_ratio=self.arc_overlap,
                     probe_angles_deg=list(self.probe_angles), probe_target_depth_mm=self.probe_depth,
+                    probe_scan_mode=self.probe_scan_mode,
                     probe_offset_deg=self.probe_offset, scan_offset_deg=self.scan_offset,
                     scan_point_count=self.scan_pattern['point_count'] if self.scan_pattern else None,
                     scan_spacing_deg=self.scan_pattern['spacing_deg'] if self.scan_pattern else None,
@@ -102,6 +104,7 @@ class InspectionWorkflow:
         self.probe_arm_center = None
         self.scan_offset = None
         self.scan_pattern = None
+        self.probe_scan_mode = 'confirmed'
         self.total = passes
         if home_probe:
             self.queue.append(('home', 0.))
@@ -109,23 +112,31 @@ class InspectionWorkflow:
         self.queue.extend(('pass', upper if index % 2 == 0 else lower) for index in range(passes))
         self.message = 'Homing probe before confirmation.' if home_probe else 'Moving to sweep start.'
 
-    def probe(self, lower, upper, depth, pattern=None):
-        if self.confirmed_angle is None:
+    def probe(self, lower, upper, depth, pattern=None, full_range=False):
+        if not full_range and self.confirmed_angle is None:
             raise ValueError('Confirm a detection before starting the probe scan')
         if not all(math.isfinite(v) for v in (lower, upper, depth)) or lower >= upper or depth <= 0:
             raise ValueError('Valid arm limits and maximum probe depth are required')
-        center = self.confirmed_angle - self.probe_offset
+        center = (lower+upper)/2 if full_range else self.confirmed_angle - self.probe_offset
         if not lower <= center <= upper:
             raise ValueError('Confirmed target is outside probe reach. Reposition the rover and confirm again.')
         pattern = probe_scan.validate(probe_scan.DEFAULTS if pattern is None else pattern)
         count, spacing = pattern['point_count'], pattern['spacing_deg']
         midpoint = (count - 1) / 2
-        angles = sorted({round(max(lower, min(upper, center + (index - midpoint) * spacing)), 4)
-                         for index in range(count)})
+        if full_range:
+            count=math.floor((upper-lower)/spacing)+1
+            angles=[round(lower+index*spacing,4) for index in range(count)]
+            if upper-angles[-1] > 1e-4:
+                angles.append(round(upper,4))
+            pattern=dict(pattern,point_count=len(angles))
+        else:
+            angles = sorted({round(max(lower, min(upper, center + (index - midpoint) * spacing)), 4)
+                             for index in range(count)})
         self._begin('PROBING')
         self.lower, self.upper = lower, upper
         self.points = []
         self.scan_pattern = pattern
+        self.probe_scan_mode = 'manual' if full_range else 'confirmed'
         self.scan_offset = self.probe_offset
         self.probe_angles = [angle + self.scan_offset for angle in angles]
         self.probe_depth = depth

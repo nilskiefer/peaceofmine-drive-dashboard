@@ -137,9 +137,9 @@
             <p id="manual-probe-status" class="note">Waiting for probe readings.</p>
           </section>
           <section class="pane-section probe-load" aria-labelledby="probe-map-heading">
-            <div class="section-head"><h2 id="probe-map-heading">Probe scan map <span class="tip" data-tip="Each marker represents a planned probe position. Read its bearing and depth on the fan or in the grid below. A dash means depth is unknown. The dashed line marks the target bearing. Increasing bearings turn left from it."></span></h2><span id="probe-map-depth" class="head-note"></span></div>
+            <div class="section-head"><h2 id="probe-map-heading">Probe scan map <span class="tip" data-tip="Each marker represents a planned probe position. Read its bearing and depth on the fan or in the grid below. A dash means depth is unknown. The dashed line marks the target bearing, or the range center for a manual scan. Increasing bearings turn left from it."></span></h2><span id="probe-map-depth" class="head-note"></span></div>
             <dl id="probe-map-centers" class="probe-map-centers" hidden>
-              <div><dt>Target bearing</dt><dd id="probe-map-bearing">—</dd></div>
+              <div><dt id="probe-map-bearing-label">Target bearing</dt><dd id="probe-map-bearing">—</dd></div>
               <div><dt>Commanded arm center</dt><dd id="probe-map-arm-center">—</dd></div>
               <div><dt>Scan plan</dt><dd id="probe-map-plan">—</dd></div>
             </dl>
@@ -169,17 +169,20 @@
         <div class="dock-pane pane-log" data-dock-pane="log" role="tabpanel" hidden>
           <section class="pane-section target-log-panel" aria-labelledby="target-log-heading">
             <div class="section-head">
-              <h2 id="target-log-heading">Mission log <span class="tip" data-tip="Saved on the car and shared with all viewers. A pump run does not prove a visible mark."></span></h2>
+              <h2 id="target-log-heading">Mission log <span class="tip" data-tip="Telemetry is recorded automatically on the car. Each sweep starts a new run. Downloads contain the full session; Summary CSV contains the entries below. A pump run does not prove a visible mark."></span></h2>
               <span id="target-count" class="badge neutral">0 TARGETS</span>
-              <div class="target-log-actions">
+              <div class="target-log-actions btn-row">
                 <button id="mark-target-btn" type="button" class="quiet" title="Save the car's position without running the pump">Log position</button>
-                <button id="export-target-log" type="button" class="quiet">Export CSV</button>
-                <button id="clear-target-log" type="button" class="quiet">Clear</button>
+                <button id="download-mission-jsonl" type="button" class="quiet" title="Download all recorded telemetry and events in the current session">Download JSONL</button>
+                <button id="download-mission-csv" type="button" class="quiet" title="Download all recorded telemetry and events in the current session as CSV">Full CSV</button>
+                <button id="export-target-log" type="button" class="quiet" title="Export the summary entries below as CSV">Summary CSV</button>
+                <button id="clear-target-log" type="button" class="quiet" title="Clear summary entries; full session recordings are retained">Clear</button>
               </div>
             </div>
+            <p id="mission-recording-status" class="meta" role="status">Waiting for session log.</p>
             <div class="table-wrap">
               <table class="target-table">
-                <thead><tr><th scope="col">ID</th><th scope="col">Position</th><th scope="col" title="Recorded filtered detector voltage">Detector (V)</th><th scope="col">Contact depth (mm)</th><th scope="col" title="Filtered probe voltage when descent ended">Probe sensor (V)</th><th scope="col">Result</th><th scope="col">Time</th></tr></thead>
+                <thead><tr><th scope="col">ID</th><th scope="col">Position</th><th scope="col" title="Recorded filtered detector voltage">Detector (V)</th><th scope="col">Contact depth (mm)</th><th scope="col" title="Recorded contact counts, or filtered probe voltage when counts are unavailable">Probe contact</th><th scope="col">Result</th><th scope="col">Time</th></tr></thead>
                 <tbody id="target-log-body"><tr class="empty-row"><td colspan="7">Nothing logged yet. Log a position, mark the ground or run a probe.</td></tr></tbody>
               </table>
             </div>
@@ -248,11 +251,15 @@
               <small id="mode-align-help" class="step-note"></small>
             </div>
             <div class="operation-action">
-              <button id="mode-probe-btn" type="button" class="mode-btn" disabled title="Probe the planned positions around the confirmed bearing">
-                <span class="mode-num">3</span><span class="mode-copy"><span class="mode-text">Probe scan</span><span class="mode-desc">Probe the planned positions around the hit</span></span>
-                <span id="mode-probe-pill" class="badge neutral">SETUP REQUIRED</span>
-              </button>
+              <div class="probe-scan-actions">
+                <button id="mode-probe-btn" type="button" class="mode-btn" disabled title="Probe the planned positions around the confirmed bearing">
+                  <span class="mode-num">3</span><span class="mode-copy"><span class="mode-text">Probe scan</span><span class="mode-desc">Probe the planned positions around the hit</span></span>
+                  <span id="mode-probe-pill" class="badge neutral">SETUP REQUIRED</span>
+                </button>
+                <button id="mode-manual-probe-btn" type="button" class="quiet" disabled aria-label="Manual probe scan" aria-describedby="mode-manual-probe-help" title="Probe the full saved arm range at the saved spacing and maximum depth, without confirming an arc">Manual</button>
+              </div>
               <small id="mode-probe-help" class="step-note"></small>
+              <small id="mode-manual-probe-help" class="step-note"></small>
             </div>
             <div class="operation-action">
               <button id="mode-mark-btn" type="button" class="mode-btn" disabled title="Aim the probe nozzle at the metal point, then spray">
@@ -470,18 +477,18 @@
         </section>
         <div class="panel-grid cols-2">
           <section class="set-card">
-            <header class="card-head"><h4><span class="step">2</span>Move the arm <span class="tip" data-tip="Hold a button to move; let go to stop. Jogging can go past the saved limits, so watch the linkage."></span></h4></header>
-            <div class="hold-row">
+            <header class="card-head"><h4><span class="step">2</span>Move the arm <span class="tip" data-tip="Use the position slider to move the arm. Watch the linkage while setting its safe limits."></span></h4></header>
+            <div class="hold-row" hidden>
               <button type="button" id="arm-jog-left">← Hold left</button>
               <button type="button" id="arm-jog-right">Hold right →</button>
             </div>
-            <p id="arm-jog-status" class="arm-jog-status status-msg" role="status">Jogging disabled</p>
-            <label class="field"><span class="field-name">Jog speed <span class="unit">°/s</span></span><input id="arm-jog-speed" type="number" step="any" value="2" required></label>
+            <p id="arm-jog-status" class="arm-jog-status status-msg" role="status" hidden>Jogging disabled</p>
+            <label class="field" hidden><span class="field-name">Jog speed <span class="unit">°/s</span></span><input id="arm-jog-speed" type="number" step="any" value="2" required></label>
             <label class="field" for="arm-position-slider"><span class="field-name">Go to position</span><output id="arm-position-label">—</output></label>
             <input id="arm-position-slider" type="range" min="0" max="4095" step="1" value="0" disabled>
           </section>
           <section class="set-card">
-            <header class="card-head"><h4><span class="step">3</span>Record the limits <span class="tip" data-tip="Left is the higher encoder angle. Release the jog button and record each position. Saving updates the captured positions. Unrecorded rows keep their saved positions. Hold Go to move to the saved position in that row."></span></h4></header>
+            <header class="card-head"><h4><span class="step">3</span>Record the limits <span class="tip" data-tip="Left is the higher encoder angle. Move with the position slider, then record each position. Saving updates the captured positions. Unrecorded rows keep their saved positions. Hold Go to move to the saved position in that row."></span></h4></header>
             <div class="table-wrap">
               <table class="set-table arm-points-table">
                 <thead><tr><th scope="col">Limit</th><th scope="col">Captured</th><th scope="col">Saved</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
@@ -588,16 +595,18 @@
         </section>
         <div class="panel-grid cols-2">
           <section class="set-card">
-            <header class="card-head"><h4>Probe motion <span class="tip" data-tip="Down and retract speeds apply to probe cycles and manual depth targets. The motor uses the nearest supported speed within its saved speed limit. Hold controls use these saved speeds."></span></h4></header>
+            <header class="card-head"><h4>Probe motion <span class="tip" data-tip="Saved speeds apply to probe cycles, depth targets and hold controls. Fast retract is used beyond 10 mm depth; slow retract is used at 10 mm or less. Home always uses slow retract. The motor uses the nearest supported speed within its saved speed limit."></span></h4></header>
             <div class="fields-2">
               <label class="field"><span class="field-name">Down speed <span class="unit">mm/s</span></span><input id="probe-down-speed" type="number" min="0" step="any" data-positive required readonly></label>
-              <label class="field"><span class="field-name">Retract speed <span class="unit">mm/s</span></span><input id="probe-retract-speed" type="number" min="0" step="any" data-positive required readonly></label>
+              <label class="field"><span class="field-name">Fast retract <span class="unit">mm/s</span> <span class="tip" data-tip="Retract speed beyond 10 mm depth. At 10 mm or less, the probe uses slow retract."></span></span><input id="probe-retract-speed" type="number" min="0" step="any" data-positive required readonly></label>
+              <label class="field"><span class="field-name">Slow retract <span class="unit">mm/s</span> <span class="tip" data-tip="Retract speed at 10 mm depth or less. Home always uses this speed, including the initial Home."></span></span><input id="probe-retract-slow-speed" type="number" min="0" step="any" data-positive required readonly></label>
+              <label class="field"><span class="field-name">Contact slowdown <span class="unit">×</span> <span class="tip" data-tip="Applies only while moving down with ESP32 contact input. Slowdown = max(1, factor × filtered absolute load-cell counts / saved threshold); down speed is divided by this value. At 3×, half the threshold gives 1/1.5 speed and the threshold gives 1/3 speed. 1 disables slowdown. Contact at the threshold still triggers retraction."></span></span><input id="probe-contact-slowdown-factor" type="number" min="1" step="any" required readonly></label>
             </div>
             <div class="card-actions"><button id="probe-stroke-save" type="button" class="primary" disabled>Save on car</button></div>
             <p id="probe-stroke-status" class="status-msg" role="status">Waiting for car settings.</p>
           </section>
           <section class="set-card">
-            <header class="card-head probe-home-row"><h4><span class="step">2</span>Home <span class="tip" data-tip="Hold Home while the probe retracts to the top. Release at the top to set zero; automatic load detection also stops and sets zero. Stop releases the motor without setting zero."></span></h4><button type="button" id="probe-servo-home">↑ Hold Home</button><p id="probe-servo-home-status" class="meta" role="status">Waiting for probe encoder</p></header>
+            <header class="card-head probe-home-row"><h4><span class="step">2</span>Home <span class="tip" data-tip="Hold Home while the probe retracts to the top at the saved slow retract speed. Release at the top to set zero; automatic load detection also stops and sets zero. Stop releases the motor without setting zero."></span></h4><button type="button" id="probe-servo-home">↑ Hold Home</button><p id="probe-servo-home-status" class="meta" role="status">Waiting for probe encoder</p></header>
             <header class="card-head"><h4><span class="step">3</span>Save maximum depth <span class="tip" data-tip="After homing, hold Down to the deepest safe point, release, then save the current measured encoder depth. Depth uses the car’s saved travel conversion; no manual measurement is needed."></span></h4></header>
             <div class="hold-row">
               <button type="button" id="probe-servo-jog-left">↓ Hold down</button>

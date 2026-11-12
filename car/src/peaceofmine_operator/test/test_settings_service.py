@@ -93,7 +93,7 @@ class SettingsServiceTest(unittest.TestCase):
             node_type = module('operator_settings_node').OperatorSettings
             node = node_type(parameter_overrides=options)
             try:
-                valid = dict(down_mm_s=1.75, retract_mm_s=13., home_load_percent=15.)
+                valid = dict(down_mm_s=1.75, retract_mm_s=13., retract_slow_mm_s=3., home_load_percent=15., contact_slowdown_factor=3.)
                 request = dict(request_id='stroke', section='probe_stroke', value=valid)
                 node.command(String(data=json.dumps(request)))
                 self.assertEqual(configuration.load(path)['probe_stroke'], valid)

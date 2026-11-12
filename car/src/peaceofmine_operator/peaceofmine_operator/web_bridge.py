@@ -11,13 +11,15 @@ from rclpy.qos import DurabilityPolicy, QoSProfile
 from std_msgs.msg import String
 from .adc_telemetry import ADCTelemetry
 from .transport_clock import transport_stamp
+from . import configuration
 
 
 class OperatorWebBridge(Node):
     def __init__(self):
         super().__init__('operator_web')
         for name, value in dict(host='0.0.0.0', port=8080, tls_cert='', tls_key='',
-                                camera_stream_base_url='http://127.0.0.1:8081').items():
+                                camera_stream_base_url='http://127.0.0.1:8081',
+                                config_file=configuration.default_path()).items():
             self.declare_parameter(name, value)
         self._lock = threading.RLock()
         self._connected_sockets = {}

@@ -196,6 +196,7 @@
       <param name="config_file" value="$(var config_file)" type="str"/>
     </node>
     <node pkg="peaceofmine_operator" exec="operator_web_node.py" name="operator_web" output="screen">
+      <param name="config_file" value="$(var config_file)" type="str"/>
       <param name="host" value="$(var host)" />
       <param name="port" value="$(var port)" />
       <param name="tls_cert" value="$(var tls_cert)" type="str" />

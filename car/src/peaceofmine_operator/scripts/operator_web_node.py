@@ -30,6 +30,7 @@ from rclpy.signals import SignalHandlerOptions
 from ament_index_python.packages import get_package_share_directory
 from rclpy.executors import MultiThreadedExecutor
 from peaceofmine_operator.camera_stream import CameraStreams
+from peaceofmine_operator.mission_session import export_chunks
 
 from peaceofmine_operator.web_bridge import OperatorWebBridge as OperatorGateway
 
@@ -97,6 +98,40 @@ def build_ssl_context(cert: str, key: str) -> ssl.SSLContext | None:
 def build_app(node: OperatorGateway) -> web.Application:
     app = web.Application()
     dashboard = dashboard_directory()
+    recordings = Path(str(node.get_parameter('config_file').value)).resolve().parent / 'mission-sessions'
+
+    async def recording_handler(request):
+        format = request.query.get('format', 'jsonl')
+        if format not in ('jsonl', 'csv'):
+            raise web.HTTPBadRequest(text='Expected jsonl or csv')
+        filename = request.query.get('filename')
+        if filename:
+            if Path(filename).name != filename or not filename.startswith('mission-') or not filename.endswith('.jsonl'):
+                raise web.HTTPBadRequest(text='Invalid recording filename')
+            path = recordings / filename
+        else:
+            paths = sorted(recordings.glob('mission-*.jsonl'))
+            if not paths:
+                raise web.HTTPNotFound(text='No mission recordings yet')
+            path = paths[-1]
+        if not path.is_file() or path.resolve().parent != recordings:
+            raise web.HTTPNotFound(text='Recording not found')
+        response = web.StreamResponse(headers={
+            'Content-Type': 'text/csv; charset=utf-8' if format == 'csv' else 'application/x-ndjson',
+            'Content-Disposition': f'attachment; filename="{path.stem}.{format}"',
+            'Cache-Control': 'no-store'})
+        chunks = export_chunks(path, format)
+        await response.prepare(request)
+        try:
+            while True:
+                chunk = await asyncio.to_thread(next, chunks, None)
+                if chunk is None:
+                    break
+                await response.write(chunk)
+        finally:
+            await asyncio.to_thread(chunks.close)
+        await response.write_eof()
+        return response
     async def field_handler(request):
         try:
             after = float(request.query['trail_after']) if 'trail_after' in request.query else None
@@ -192,6 +227,7 @@ def build_app(node: OperatorGateway) -> web.Application:
     app.router.add_get('/camera/{camera}', camera_handler)
     app.router.add_get('/ws', socket_handler)
     app.router.add_get('/api/field', field_handler)
+    app.router.add_get('/api/mission-session', recording_handler)
     app.router.add_get('/api/adc', adc_handler)
     app.router.add_get('/api/detector-history', detector_history_handler)
     return app

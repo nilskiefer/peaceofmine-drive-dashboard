@@ -17,6 +17,7 @@
   <depend>std_msgs</depend>
 
   <exec_depend>joy</exec_depend>
+  <exec_depend>rosidl_runtime_py</exec_depend>
 
   <exec_depend>python3-aiohttp</exec_depend>
   <exec_depend>python3-pyudev</exec_depend>

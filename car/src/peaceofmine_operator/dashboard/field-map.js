@@ -138,6 +138,7 @@
       const response = await fetch('/api/field?' + query, {cache: 'no-store', signal: AbortSignal.timeout(4000)});
       if (!response.ok) throw Error();
       field = await response.json();
+      window.operatorMissionRecording?.(field.recording);
       if (Number.isFinite(field.trail_from)) field.trail = previous.filter(p => p[0] >= field.trail_from).concat(field.trail);
       window.operatorFieldAvailable = field.receiver !== 'Field recorder offline';
       if (Array.isArray(field.entries)) {
@@ -148,6 +149,7 @@
     } catch {
       window.operatorFieldAvailable = false;
       field = {...field, receiver: 'Field recorder offline', fix: null};
+      window.operatorMissionRecording?.({error: 'Field recorder offline'});
     }
     try { drawField(); drawPreview(); setup(); } finally { setTimeout(poll, 1000); }
   }

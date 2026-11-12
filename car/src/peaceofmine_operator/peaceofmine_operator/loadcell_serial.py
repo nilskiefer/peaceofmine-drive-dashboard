@@ -110,7 +110,7 @@ class LoadCellSerial:
             self.zero_since = now
         self.sample, self.last_ms = sample, sample['ms']
         self.received, self.error = now, None
-        self.samples.append((self.received, sample['raw_counts'], sample['filtered_counts']))
+        self.samples.append((self.received, sample['raw_counts'], sample['filtered_counts'],sample['ms']))
 
     def poll(self):
         now = self.clock()
@@ -167,6 +167,6 @@ class LoadCellSerial:
                      sample_ms=self.last_ms, session=self.session,
                      can_zero=bool(fresh and self.zero_window(now)))
         if include_history:
-            state['samples'] = [dict(x=round(at-now,4), raw_counts=raw, filtered_counts=filtered)
-                                for at,raw,filtered in self.samples if now-at <= 30]
+            state['samples'] = [dict(x=round(at-now,4), raw_counts=raw, filtered_counts=filtered,sample_ms=stamp)
+                                for at,raw,filtered,stamp in self.samples if now-at <= 30]
         return state
