@@ -80,6 +80,74 @@ class ProbeCycleTest(unittest.TestCase):
         self.probe.motion = None
         self.probe.lifecycle = 'IDLE'
 
+    def loadcell_input(self, counts):
+        from peaceofmine_operator.adc_contact import AdcContact
+        self.probe.contact = AdcContact()
+        self.probe.contact.configure(dict(enabled=True, mux=0, level=50., direction='above', hysteresis=5., debounce_ms=0.))
+        self.probe.contact_settings = dict(source='esp32',zero_counts=1000)
+        self.probe.contact_config_valid = True
+        self.probe.simulation = False
+        self.probe.loadcell = MagicMock()
+        self.probe.settings = MagicMock()
+        self.probe.settings.pending = None
+        self.probe.loadcell.session = 1
+        self.probe.loadcell.last_ms = 100
+        self.probe.loadcell_state = MagicMock(return_value=dict(fresh=True, net_counts=counts, busy=False))
+        self.probe.poll_loadcell()
+
+    def test_loadcell_contact_retracts_and_loss_stops_descent(self):
+        self.loadcell_input(0.)
+        self.probe.start_probe_cycle(80.)
+        self.probe.telemetry.position = 3500
+        self.probe.loadcell.last_ms = 200
+        self.probe.loadcell_state.return_value = dict(fresh=True, net_counts=-60., busy=False)
+        self.probe.poll_loadcell()
+        self.probe.update_behavior()
+        self.assertEqual(self.probe.cycle_phase, 'RETRACTING')
+        self.assertTrue(self.probe.contact_detected)
+        self.assertEqual(self.probe.contact_depth_mm, 20.)
+        self.assertIsNone(self.probe.contact_volts)
+        self.assertEqual(self.probe.operation.target, self.probe.home_position)
+
+    def test_loadcell_loss_aborts_instead_of_using_adc(self):
+        self.loadcell_input(0.)
+        self.probe.start_probe_cycle(80.)
+        self.probe.loadcell_state.return_value = dict(fresh=False, net_counts=None, busy=False)
+        self.probe.poll_loadcell()
+        self.probe.update_behavior()
+        self.assertIsNone(self.probe.operation)
+        self.assertFalse(self.probe.cycle_active)
+        self.assertEqual(self.probe.last_probe_result['status'], 'ABORTED')
+        self.assertIn('Contact input lost', self.probe.last_probe_result['reason'])
+
+    def test_saved_zero_uses_raw_counts_without_mass_calibration(self):
+        self.probe.contact_settings = dict(zero_counts=1000)
+        self.probe.settings = MagicMock()
+        self.probe.settings.pending = None
+        self.probe.loadcell = MagicMock()
+        self.probe.loadcell.snapshot.return_value = dict(fresh=True,raw_counts=1123)
+        self.assertEqual(self.probe.loadcell_state()['net_counts'],123)
+        self.assertTrue(self.probe.loadcell_state()['zeroed'])
+        self.probe.loadcell.snapshot.return_value.update(fresh=False,raw_counts=None)
+        self.assertIsNone(self.probe.loadcell_state()['net_counts'])
+
+    def test_zero_save_blocks_probe_motion_and_defers_source_changes(self):
+        from peaceofmine_operator.actuator_controller import ActuatorController
+        self.probe.loadcell = MagicMock()
+        self.probe.contact_config_valid = True
+        self.probe.settings = MagicMock()
+        self.probe.settings.pending = ('zero', 1.)
+        with patch.object(ActuatorController, 'interlock', return_value=True):
+            self.assertFalse(ProbeController.interlock(self.probe))
+            self.probe.settings.pending = None
+            self.assertTrue(ProbeController.interlock(self.probe))
+        self.probe.settings = MagicMock()
+        self.probe.settings.pending = ('zero', 1.)
+        with patch.object(probe_mod.configuration, 'load') as load:
+            ProbeController.reload_contact(self.probe)
+            load.assert_not_called()
+            self.probe.loadcell.configure.assert_not_called()
+
     def test_start_probe_cycle_validates_interlock(self):
         self.probe.fault=True
         with self.assertRaises(ValueError):
@@ -392,6 +460,17 @@ class OperatorControlProbeTest(unittest.TestCase):
         self.ctrl._joy_live = lambda now: False
         self.ctrl._apply_drive_locked = MagicMock()
         self.ctrl._emit_cmd_vel = MagicMock()
+
+    def test_loadcell_commands_require_control_and_stop_motion_before_forwarding(self):
+        self.ctrl._loadcell_command_pub = MagicMock()
+        command = dict(type='loadcell', action='zero', request_id='zero')
+        error = self.ctrl.handle_command('spectator', command)
+        self.assertIn('Spectator', error['message'])
+        self.ctrl._loadcell_command_pub.publish.assert_not_called()
+        self.assertIsNone(self.ctrl.handle_command('client1', command))
+        self.assertEqual(self.ctrl._probe_command_pub.publish.call_args.args[0].action, 'stop')
+        self.assertEqual(json.loads(self.ctrl._loadcell_command_pub.publish.call_args.args[0].data), command)
+        self.assertFalse(self.ctrl._deadman)
 
     def test_start_probe_cycle_dispatches_when_stationary(self):
         res = self.ctrl.handle_command('client1', {'type': 'start_probe_cycle', 'depth_mm': 80.0, 'request_id': 'req1'})

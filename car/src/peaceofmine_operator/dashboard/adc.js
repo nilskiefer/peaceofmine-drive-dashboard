@@ -48,9 +48,119 @@
       return 'Set a finite offset and a nonzero input multiplier in Setup → Sensor board.';
     return '';
   }
-  window.operatorContactBlock = () => !adcOnline || !latest?.probe_trigger ? 'Waiting for contact settings.'
+  const sourceInput = document.getElementById('contact-source');
+  const sourceSave = document.getElementById('contact-source-save');
+  const sourceFeedback = document.getElementById('contact-source-feedback');
+  const cellThreshold = document.getElementById('loadcell-threshold');
+  const cellZero = document.getElementById('loadcell-zero');
+  let sourceDirty = false, sourcePending = null, sourceMessage = '', cellPending = null, cellMessage = '';
+  let cellHistory = [], cellHistorySession = null, cellHistoryStamp = null, cellHistoryAt = 0;
+  function sourceDraft() {
+    return {source:sourceInput.value, threshold_counts:cellThreshold.value === '' ? null : cellThreshold.valueAsNumber};
+  }
+  function sourceChanged() {
+    const saved = state.settings?.probe_contact;
+    return Boolean(saved && Object.entries(sourceDraft()).some(([key,value]) => saved[key] !== value));
+  }
+  function sourceProblem() {
+    const draft = sourceDraft();
+    if (!['adc','esp32'].includes(draft.source)) return 'Choose a contact sensor.';
+    if (draft.threshold_counts !== null && (!Number.isFinite(draft.threshold_counts) || draft.threshold_counts <= 0)) return 'Enter a positive threshold or leave it blank while setting up.';
+    return '';
+  }
+  function loadcellProblem() {
+    const cell = state.probe?.loadcell, saved = state.settings?.probe_contact;
+    if (!state.connected || !cell?.connected) return cell?.error || 'Waiting for the ESP32 load cell.';
+    if (cell.busy || cellPending) return 'Waiting for the zero to save.';
+    if (!cell.fresh) return cell.error || 'Waiting for a fresh load-cell reading.';
+    if (!cell.zeroed || !Number.isFinite(saved?.zero_counts)) return 'Zero the unloaded probe in Setup → Probe contact.';
+    if (!Number.isFinite(saved.threshold_counts) || saved.threshold_counts <= 0) return 'Set a contact threshold in Setup → Probe contact.';
+    return '';
+  }
+  window.operatorContactBlock = () => sourcePending || (sourceDirty && sourceChanged()) ? 'Save or undo your edits in Setup → Probe contact.'
+    : state.settings?.probe_contact?.source === 'esp32' ? loadcellProblem() || (state.probe?.adc_contact_state?.source !== 'esp32' || state.probe.adc_contact_state.level !== state.settings.probe_contact.threshold_counts || !state.probe.adc_contact_state.enabled || !state.probe.adc_contact_state.fresh ? 'Waiting for the saved contact threshold to apply.' : '')
+    : !adcOnline || !latest?.probe_trigger ? 'Waiting for contact settings.'
     : inputProblem(latest.probe_trigger.mux) || (pending ? 'Wait for ADC settings to finish saving.'
     : contactDirty ? 'Save or undo your edits in Setup → Probe contact.' : '');
+
+  function renderContactSource() {
+    const saved = state.settings?.probe_contact;
+    const owner = state.connected && state.drive.you_control_owner;
+    if (!owner) { sourceDirty = false; sourcePending = null; sourceMessage = ''; cellPending = null; }
+    if (sourcePending) {
+      if (saved && Object.entries(sourcePending.value).every(([key,value]) => saved[key] === value)) {
+        sourcePending = null; sourceDirty = false; sourceMessage = 'Saved on car.';
+      } else if (performance.now() - sourcePending.at > 5000) {
+        sourcePending = null; sourceMessage = 'No save confirmation. Check the car settings and retry.';
+      }
+    }
+    if (!sourceDirty && saved) {
+      sourceInput.value = saved.source;
+      cellThreshold.value = saved.threshold_counts ?? '';
+    }
+    const esp32 = sourceInput.value === 'esp32';
+    document.querySelectorAll('[data-contact-adc]').forEach(card => { card.hidden = esp32; });
+    document.querySelectorAll('[data-contact-loadcell]').forEach(card => { card.hidden = !esp32; });
+    const problem = saved ? sourceProblem() : '';
+    const cell = state.probe?.loadcell;
+    const editable = owner && Boolean(saved) && !sourcePending && !cellPending && !cell?.busy;
+    for (const input of [sourceInput,cellThreshold]) input.disabled = !editable;
+    sourceSave.disabled = !editable || Boolean(problem) || !sourceChanged();
+    document.getElementById('contact-source-revert').disabled = !editable || !sourceDirty;
+    sourceFeedback.textContent = !saved ? 'Waiting for car settings.' : !owner ? 'Take control to edit.'
+      : sourcePending ? 'Saving…' : sourceMessage || problem || (sourceChanged() ? 'Unsaved contact settings.' : 'Saved on car.');
+    if (cell?.session !== cellHistorySession) {
+      cellHistory = []; cellHistoryStamp = null; cellHistorySession = cell?.session;
+    }
+    if (Array.isArray(cell?.samples) && state.probe.history_time_s !== cellHistoryStamp) {
+      cellHistory = cell.samples; cellHistoryStamp = state.probe.history_time_s;
+      cellHistoryAt = performance.now() - Math.max(0,state.probe.history_age_s ?? 0)*1000;
+    }
+    const live = state.connected && cell?.connected && cell.fresh && !cell.busy;
+    const zeroed = cell?.zeroed && Number.isFinite(saved?.zero_counts);
+    const value = zeroed ? cell?.net_counts : cell?.raw_counts;
+    const reading = live && Number.isFinite(value) ? `${Math.round(value)} counts${zeroed ? '' : ' · raw'}` : '—';
+    const contact = state.probe?.adc_contact_state;
+    const cellStatus = !live ? cell?.error || 'Waiting for the ESP32 load cell.'
+      : `${contact?.source === 'esp32' && contact.fresh ? (contact.detected === true ? 'CONTACT' : 'Clear') : zeroed ? 'Live' : 'Zero needed'} · ${reading}`;
+    if (esp32) {
+      document.getElementById('contact-live-volts').textContent = reading;
+      const preview = document.getElementById('contact-draft-preview');
+      preview.hidden = live || !cellHistory.length;
+      preview.textContent = 'No fresh reading · previous samples only';
+    }
+    if (saved?.source === 'esp32') {
+      for (const id of ['adc-trigger-state','probe-adc-contact','probe-map-sensor']) document.getElementById(id).textContent = `${cellStatus} · ESP32`;
+    }
+    if (cellPending && performance.now() - cellPending.at > 5000) { cellPending = null; cellMessage = 'No zero confirmation. Check the connection and retry.'; }
+    const moving = state.probe?.active || state.probe?.moving || state.probe?.homing || state.probe?.cycle_active || state.actuators?.probe?.homing || state.actuators?.probe?.torque;
+    cellZero.disabled = !owner || saved?.source !== 'esp32' || !live || !Number.isFinite(cell.raw_counts) || moving || Boolean(cellPending) || Boolean(sourcePending) || sourceChanged();
+    document.getElementById('loadcell-feedback').textContent = cellPending || cell?.busy ? 'Saving zero on car…'
+      : cellMessage || (moving ? 'Stop the probe and release torque before zeroing.' : live && !zeroed ? 'Lift the probe clear, then zero it.' : live && !saved?.threshold_counts ? 'Press the sensor and choose a threshold from the graph.' : '');
+    document.getElementById('contact-history').setAttribute('aria-label', esp32 ? 'Load-cell counts and positive and negative contact thresholds over the last 30 seconds' : 'Filtered contact sensor voltage and contact limit over the last 30 seconds');
+  }
+  window.operatorContactSourceFrame = renderContactSource;
+  const editSource = () => { sourceDirty = true; sourceMessage = ''; renderContactSource(); if (contactChart) contactChart.$frameBucket = null; window.operatorADCFrame?.(); };
+  sourceInput.onchange = editSource;
+  cellThreshold.oninput = editSource;
+  document.getElementById('contact-source-revert').onclick = () => { sourceDirty=false; sourceMessage=''; renderContactSource(); };
+  sourceSave.onclick = () => {
+    if (sourceSave.disabled || sourceProblem()) return;
+    const saved = state.settings.probe_contact;
+    const value = {...sourceDraft(),zero_counts:saved.zero_counts};
+    sourcePending = {value:sourceDraft(),at:performance.now()}; sourceMessage = '';
+    send({type:'settings',section:'probe_contact',value}); renderContactSource();
+  };
+  cellZero.onclick = () => {
+    if (cellZero.disabled) return;
+    cellPending = {at:performance.now()}; cellMessage = '';
+    send({type:'loadcell',action:'zero'}); renderContactSource();
+  };
+  window.operatorContactSourceResult = reply => {
+    if (reply.type === 'loadcell_result') { cellPending=null; cellMessage=reply.message || (reply.ok ? 'Zero saved on car.' : 'Zero could not be saved.'); }
+    else if (reply.section === 'probe_contact' && !reply.ok) { sourcePending=null; sourceMessage=reply.message || 'Save rejected.'; }
+    renderContactSource();
+  };
 
   function renderSmoothing() {
     const filter = field('filter_ms');
@@ -88,6 +198,7 @@
       : 'Use 0 V hysteresis or move the limit inside the input range.');
   }
   function renderSensors() {
+    renderContactSource();
     renderSmoothing();
     const trigger = latest?.probe_trigger;
     const owner = adcOnline && state.connected && state.drive.you_control_owner;
@@ -144,6 +255,7 @@
       const label = {none:'—', detector:'Metal detector', probe:'Probe contact', both:'Metal detector + probe contact'}[routes[mux]];
       if (row.lastElementChild.textContent !== label) row.lastElementChild.textContent = label;
     });
+    renderContactSource();
   }
   function savedSettings() {
     return {config: structuredClone(latest.config), routes:[...latest.routes], probe_trigger:{...latest.probe_trigger}};
@@ -395,6 +507,7 @@
   }
 
   window.operatorProbeVoltageHistory = () => {
+    if (state.settings?.probe_contact?.source === 'esp32') return {data:[],limit:null,status:'ESP32 load cell selected; view counts in Setup → Probe contact.'};
     const trigger = latest?.probe_trigger;
     if (!trigger) return {data:[], limit:null, status:'Contact settings unavailable.'};
     const channel = channelAt(trigger.mux);
@@ -498,6 +611,7 @@
   }
 
   function drawContactHistory() {
+    if (sourceInput.value === 'esp32') { drawLoadcellHistory(); return; }
     if (contactChart && scrollTimeChart(contactChart, performance.now())) return;
     const mux = Number(muxInput.value);
     const traces = datasets(null, 'filtered_volts', 30, mux);
@@ -516,9 +630,46 @@
       type:'line', data:{datasets:[]}, options:{animation:false, responsive:true, maintainAspectRatio:false, parsing:false,
         plugins:{decimation:{enabled:true, algorithm:'min-max'}}, scales:{x:{type:'linear', min:-30, max:0,
           title:{display:true,text:'Time (s)'}}, ads1115:{type:'linear',position:'left',title:{display:true,text:'Voltage (V)'}}}}});
+    contactChart.options.plugins.decimation.enabled = true;
+    contactChart.options.scales.ads1115.title.text = 'Voltage (V)';
+    delete contactChart.options.scales.ads1115.min; delete contactChart.options.scales.ads1115.max;
     contactChart.data.datasets = traces;
     contactChart.$scrollPixels = 0;
     contactChart.$renderedAt = performance.now();
+    contactChart.update('none');
+  }
+  function drawLoadcellHistory() {
+    if (contactChart && scrollTimeChart(contactChart, performance.now())) return;
+    const cell = state.probe?.loadcell, saved = state.settings?.probe_contact;
+    const zeroed = cell?.zeroed && Number.isFinite(saved?.zero_counts);
+    const elapsed = Math.max(0,(performance.now()-cellHistoryAt)/1000);
+    const data = [];
+    if (state.connected) for (const point of cellHistory) {
+      const x = point.x - elapsed;
+      if (!Number.isFinite(x) || x < -30 || x > 0 || !Number.isFinite(point.raw_counts)) continue;
+      if (data.length && x-data.at(-1).x > .5) data.push({x:x-.001,y:null});
+      data.push({x,y:point.raw_counts-(zeroed ? saved.zero_counts : 0)});
+    }
+    const color = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    const traces = [{label:zeroed ? 'Load cell · change from zero (counts)' : 'Load cell · raw counts (zero not set)',data,
+      yAxisID:'ads1115',borderColor:color('--accent'),borderWidth:1.5,pointRadius:0,spanGaps:false}];
+    const level = cellThreshold.valueAsNumber;
+    if (zeroed && Number.isFinite(level) && level > 0) for (const sign of [1,-1]) traces.push({
+      label:`${sourceDirty && sourceChanged() ? 'Draft' : 'Contact'} threshold ${sign > 0 ? '+' : '−'}${level} counts`,
+      data:[{x:-30,y:sign*level},{x:0,y:sign*level}],yAxisID:'ads1115',borderColor:color('--warn'),borderWidth:1,borderDash:[5,4],pointRadius:0});
+    if (!contactChart) contactChart = new Chart(document.getElementById('contact-history'), {
+      type:'line',data:{datasets:[]},options:{animation:false,responsive:true,maintainAspectRatio:false,parsing:false,
+        plugins:{decimation:{enabled:true,algorithm:'min-max'},legend:{labels:{color:color('--muted')}}},scales:{x:{type:'linear',min:-30,max:0,ticks:{color:color('--muted')},title:{display:true,text:'Time (s)',color:color('--muted')}},
+        ads1115:{type:'linear',position:'left',title:{display:true,text:'Counts'}}}}});
+    const values = traces.flatMap(line => line.data.map(point => point.y)).filter(Number.isFinite);
+    const bounds = values.length ? signalBounds(Math.min(...values),Math.max(...values),1) : {};
+    contactChart.options.plugins.decimation.enabled = false;
+    contactChart.options.plugins.legend.labels.color = color('--muted');
+    contactChart.options.scales.x.ticks.color = color('--muted');
+    contactChart.options.scales.x.title.color = color('--muted');
+    contactChart.options.scales.ads1115 = {type:'linear',position:'left',ticks:{color:color('--muted')},title:{display:true,text:zeroed ? 'Change from zero (counts)' : 'Raw counts · zero not set',color:color('--muted')},...bounds};
+    contactChart.data.datasets = traces;
+    contactChart.$scrollPixels = 0; contactChart.$renderedAt = performance.now();
     contactChart.update('none');
   }
   function drawBoardHistory() {
@@ -553,7 +704,7 @@
     draw:() => drawManualProbeHistory(performance.now(), true), reset:() => { manualProbeChart = null; }};
   window.operatorADCFrame = () => {
     const setup = document.getElementById('settings-dialog').open;
-    const plot = setup ? latest && plots.find(item => !document.getElementById(item.panel).hidden)
+    const plot = setup ? plots.find(item => !document.getElementById(item.panel).hidden && (latest || (item.panel === 'settings-contact' && sourceInput.value === 'esp32')))
       : !document.querySelector('[data-dock-pane="probe"]').hidden && probePlot;
     if (!plot || performance.now() < (plot.retryAt || 0)) return;
     const message = document.getElementById(plot.error);
@@ -608,6 +759,7 @@
       document.getElementById('probe-adc-contact').textContent='ADC disconnected';
       document.getElementById('probe-map-sensor').textContent='ADC disconnected';
       document.getElementById('contact-live-volts').textContent='—';
+      renderContactSource();
     }
     if (value) {
       try { receive(value); }
@@ -616,6 +768,7 @@
         el('trigger-state').textContent = el('error').textContent;
       }
     }
+    renderContactSource();
     setTimeout(poll, document.hidden ? 1000 : 100);
   }
   poll();

@@ -452,6 +452,10 @@ function connect() {
       recordLatency(message.probe_id);
       return;
     }
+    if (message.type === 'loadcell_result' || (message.type === 'settings_result' && message.section === 'probe_contact')) {
+      window.operatorContactSourceResult?.(message);
+      return;
+    }
     if (message.type === 'settings_result' && armSetupForms.has(message.section)) {
       armSetupForms.get(message.section).result(message);
       return;
@@ -511,6 +515,10 @@ function connect() {
       else if (Object.hasOwn(sensor, 'history')) {
         if (Array.isArray(sensor.history)) detectorHistoryAt = lastTelemetryAt - Math.max(0, sensor.history_age_s ?? 0) * 1000;
       } else sensor.history = state.detector.sensor?.history;
+    }
+    if (message.probe?.loadcell && !Object.hasOwn(message.probe.loadcell, 'samples')
+        && message.probe.loadcell.session === state.probe.loadcell?.session) {
+      message.probe.loadcell.samples = state.probe.loadcell.samples;
     }
     if (message.probe && !Object.hasOwn(message.probe, 'contact_samples')) {
       message.probe.contact_samples = state.probe.contact_samples;
@@ -1431,6 +1439,7 @@ function updateHud() {
     : 'Position unavailable · check localization.';
 
   updateInputHint();
+  window.operatorContactSourceFrame?.();
 }
 
 function deadmanHint() {

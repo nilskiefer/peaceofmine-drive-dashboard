@@ -146,7 +146,7 @@
             </div>
             <div class="probe-map-legend" aria-label="Scan result legend"><span class="map-contact">◆ Early contact</span><span class="map-clear">● Target reached</span><span class="map-unknown">○ Pending / unknown</span></div>
             <ul id="probe-map-readings" class="probe-map-readings" aria-label="Depth by probe bearing" hidden></ul>
-            <p class="section-foot probe-sensor-readout"><span>Live contact sensor <span class="tip" data-tip="The selected, filtered ADC channel detects contact during descent. The motor readings below show servo load and current."></span></span><strong id="probe-map-sensor">Waiting for ADC input</strong></p>
+            <p class="section-foot probe-sensor-readout"><span>Live contact sensor <span class="tip" data-tip="The selected ADC or ESP32 load cell detects contact during descent. The motor readings below show servo load and current separately."></span></span><strong id="probe-map-sensor">Waiting for ADC input</strong></p>
             <details id="probe-diagnostics" class="more"><summary>More readings · probe motor</summary>
               <div class="section-head pressure-heading"><h3 id="load-heading">Motor load</h3><span class="head-note">Last 30 s</span><strong id="probe-pressure" class="head-value">—</strong></div>
               <div class="chart-box probe-load-chart"><canvas id="pressure-history" aria-label="Estimated probe motor load over the last thirty seconds"></canvas></div>
@@ -684,18 +684,24 @@
 
       <section id="settings-contact" class="settings-panel" role="tabpanel" data-settings-panel="contact" hidden>
         <header class="panel-head">
-          <h3>Probe contact <span class="tip" data-tip="The probe uses this filtered ADC input to detect contact during descent. Test the response with the probe clear, then press the sensor and set the limit between the two readings."></span></h3>
+          <h3>Probe contact <span class="tip" data-tip="Choose the contact sensor used during descent. Contact records the measured depth and retracts the probe. Missing or stale readings stop extension."></span></h3>
           <div class="panel-tools"><button type="button" class="quiet" data-goto-settings="adc">Sensor board →</button></div>
         </header>
         <div class="status-bar"><p id="adc-trigger-state" class="status-msg" role="status">Waiting for contact readings</p></div>
         <div class="panel-grid cols-wide">
+          <section class="set-card span-all">
+            <header class="card-head"><h4>Contact source</h4></header>
+            <label class="field"><span class="field-name">Sensor</span><select id="contact-source"><option value="adc">ADS1115 ADC</option><option value="esp32">ESP32 load cell</option></select></label>
+            <div class="card-actions"><button id="contact-source-save" type="button" class="primary" disabled>Save on car</button><button id="contact-source-revert" type="button" class="quiet">Undo edits</button></div>
+            <p id="contact-source-feedback" class="status-msg" role="status">Waiting for car settings.</p>
+          </section>
           <section class="set-card">
             <header class="card-head"><h4>Live contact signal</h4><output class="head-value" id="contact-live-volts">—</output></header>
             <div class="metal-chart-container"><canvas id="contact-history" role="img" aria-label="Filtered contact sensor voltage and contact limit over the last 30 seconds"></canvas></div>
             <p id="contact-chart-error" class="error-line" role="status" hidden></p>
             <p id="contact-draft-preview" class="meta" hidden></p>
           </section>
-          <section class="set-card">
+          <section class="set-card" data-contact-adc>
             <header class="card-head"><h4>Contact calibration</h4></header>
             <label class="field"><span class="field-name">Sensor input</span><select id="adc-trigger-mux"></select></label>
             <label class="check"><input id="adc-trigger-enabled" type="checkbox"> Detect contact</label>
@@ -707,6 +713,12 @@
             </div>
             <div class="card-actions"><button id="probe-contact-save" type="button" class="primary" disabled>Save contact settings</button><button type="button" class="quiet" id="contact-revert">Undo edits</button></div>
             <p id="probe-contact-feedback" class="status-msg" role="status"></p>
+          </section>
+          <section class="set-card" data-contact-loadcell hidden>
+            <header class="card-head"><h4>Contact threshold</h4></header>
+            <div class="btn-row"><button id="loadcell-zero" type="button" disabled>Zero unloaded probe</button></div>
+            <label class="field"><span class="field-name">Threshold <span class="unit">counts</span><span class="tip" data-tip="Zero with the probe clear, press the sensor and watch the graph, then set a threshold between the unloaded and contact readings. Contact is detected in either direction from zero."></span></span><input id="loadcell-threshold" type="number" min="0" step="any"></label>
+            <p id="loadcell-feedback" class="status-msg" role="status"></p>
           </section>
         </div>
       </section>

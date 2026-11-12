@@ -56,6 +56,35 @@ class SettingsServiceTest(unittest.TestCase):
                 node.destroy_node()
                 rclpy.shutdown()
 
+    def test_contact_source_and_force_limit_survive_restart(self):
+        from peaceofmine_operator.probe_contact_settings import DEFAULTS
+        rclpy.init()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = str(Path(tmp) / 'operator_config.json')
+            options = [Parameter('config_file', value=path)]
+            node_type = module('operator_settings_node').OperatorSettings
+            node = node_type(parameter_overrides=options)
+            try:
+                self.assertEqual(node.shared['probe_contact']['source'], 'adc')
+                good = {**DEFAULTS, 'source':'esp32', 'threshold_counts':50., 'zero_counts':None}
+                request = dict(request_id='contact', section='probe_contact', value=good)
+                node.command(String(data=json.dumps(request)))
+                self.assertEqual(configuration.load(path)['probe_contact'], good)
+                good['zero_counts'] = 1000.
+                response = node.save(SaveSettings.Request(section='probe_contact',value_json=json.dumps(good),
+                    expected_revision=configuration.load(path)['revision']),SaveSettings.Response())
+                self.assertTrue(response.success,response.message)
+                node.command(String(data=json.dumps({**request,'value':{**good,'zero_counts':None}})))
+                self.assertEqual(configuration.load(path)['probe_contact']['zero_counts'],1000.)
+                node.command(String(data=json.dumps({**request, 'value':{**good, 'threshold_counts':-1}})))
+                self.assertEqual(configuration.load(path)['probe_contact'], good)
+                node.destroy_node()
+                node = node_type(parameter_overrides=options)
+                self.assertEqual(node.shared['probe_contact'], good)
+            finally:
+                node.destroy_node()
+                rclpy.shutdown()
+
     def test_probe_stroke_speeds_and_home_load_survive_restart(self):
         rclpy.init()
         with tempfile.TemporaryDirectory() as tmp:

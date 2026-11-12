@@ -164,6 +164,7 @@ class OperatorControl(Node):
         self._state_pub = self.create_publisher(String, 'operator/state', 10)
         self._result_pub = self.create_publisher(String, 'operator/result', 10)
         self._adc_command_pub = self.create_publisher(String, 'adc/command', 10)
+        self._loadcell_command_pub = self.create_publisher(String, 'probe/loadcell_command', 10)
         self._settings_command_pub = self.create_publisher(String, 'operator/settings/command', 10)
         self.create_subscription(String, 'operator/command', self._transport_command, 50)
         self._inspection_serial = 0
@@ -1107,6 +1108,10 @@ class OperatorControl(Node):
                     self._stop_motion_locked()
                 publisher = self._adc_command_pub if message_type == 'adc' else self._settings_command_pub
                 publisher.publish(String(data=json.dumps(payload)))
+            elif message_type == 'loadcell':
+                self._stop_motion_locked()
+                self._loadcell_command_pub.publish(String(data=json.dumps(payload)))
+                flush_drive = True
             elif message_type == 'probe_zero_contact':
                 self._probe_command_pub.publish(command_message(dict(action='zero_contact', request_id=payload.get('request_id'))))
             elif message_type == 'detector_calibrate':

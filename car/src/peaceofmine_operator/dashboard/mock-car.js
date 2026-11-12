@@ -17,6 +17,7 @@
     gnss: {max_wait_s: 5, target_accuracy_m: 1},
     probe_guidance:null, inspection:{passes:2}, probe_alignment:{offset_deg:30}, probe_scan:{point_count:7,spacing_deg:10},
     probe_stroke:{down_mm_s:5,retract_mm_s:5,home_load_percent:10},
+    probe_contact:{source:'adc',threshold_counts:null,zero_counts:null},
     marking:{duration_s:2, idle_percent:0, active_percent:100, manual_percent:0},
     saved:true, driving:{input:'controller',forward_percent:100,reverse_percent:100},
     display:{mapping:'auto',sensitivity:100,wheel:{steering:0,throttle:1,brake:2,deadman:0,invertSteering:false,
@@ -215,7 +216,8 @@
           history_time_s:(performance.timeOrigin+started)/1000+t, history_age_s:0} : {}), fault: false, ready: true, active: mock.cycle, cycle_active: mock.cycle, cycle_phase: mock.cyclePhase, cycle_goal_id: mock.inspection.probe_goal_id,
         contact_detected: mock.cycle && mock.pointResult?.status === 'CONTACT',
         contact_depth_mm: mock.cycle ? mock.pointResult?.contact_depth_mm : null, contact_volts: mock.cycle ? mock.pointResult?.contact_volts : null, holding: false,
-        adc_contact_state: mockContact()},
+        adc_contact_state: mock.settings.probe_contact.source === 'esp32' ? {source:'esp32',enabled:true,fresh:false,detected:null} : mockContact(),
+        loadcell:{connected:false,fresh:false,raw_counts:null,net_counts:null,zeroed:false,busy:false,error:'ESP32 hardware is unavailable in preview.'}},
       power: {battery: {available: true, present: true, stale: false, power_w: 38 + 6 * Math.sin(t / 3) + mock.linear * 40,
           current_a: 3.2, voltage_v: 11.9, remaining_pct: 72, temperature_c: 31, cell_delta_v: 0.012},
         history: Array.from({length: 30}, (_, i) => ({age_s: i * 2, watts: 38 + 6 * Math.sin((t - i * 2) / 3)})),
@@ -282,9 +284,13 @@
         this.emit({type:'adc_result',ok:true,message:'Applied in preview.'});
         return;
       }
-      if (m.type === 'settings' && ['driving','display','cameras','gnss','marking','inspection','probe_guidance','probe_alignment','probe_scan','probe_stroke'].includes(m.section)) {
+      if (m.type === 'settings' && ['driving','display','cameras','gnss','marking','inspection','probe_guidance','probe_alignment','probe_scan','probe_stroke','probe_contact'].includes(m.section)) {
         mock.settings[m.section] = m.value;
         this.emit({type:'settings_result',section:m.section,ok:true,message:'Saved in preview.'});
+        return;
+      }
+      if (m.type === 'loadcell') {
+        this.emit({type:'loadcell_result',ok:false,message:'ESP32 hardware is unavailable in preview.'});
         return;
       }
       if (m.type === 'clear_log') { mock.fieldEntries.length = 0; mock.markTarget = null; }
@@ -361,7 +367,7 @@
   function mockContact() {
     const channel = adcConfig.channels[probeTrigger.mux], filtered = adcFiltered.get(probeTrigger.mux);
     const fresh = probeTrigger.enabled && channel.enabled && Number.isFinite(filtered);
-    return {...probeTrigger, fresh, filtered_volts:fresh ? filtered : null,
+    return {...probeTrigger, source:'adc', fresh, filtered_volts:fresh ? filtered : null,
       value:fresh ? filtered*channel.multiplier+channel.offset : null, detected:fresh ? contactDetected : null};
   }
   let adcSeq = 0, adcLast = performance.now() / 1000;

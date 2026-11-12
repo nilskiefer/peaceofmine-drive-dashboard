@@ -14,11 +14,11 @@ from peaceofmine_operator.node_runner import run_node
 from peaceofmine_operator.detector import calibration_values
 
 
-from peaceofmine_operator import display_settings, driving_settings, field_gnss, inspection, marking_settings, probe_alignment, probe_scan, probe_stroke, probe_guidance
+from peaceofmine_operator import display_settings, driving_settings, field_gnss, inspection, marking_settings, probe_alignment, probe_scan, probe_stroke, probe_guidance, probe_contact_settings
 
 SHARED = dict(cameras=camera_settings, display=display_settings, driving=driving_settings,
               gnss=field_gnss, inspection=inspection, marking=marking_settings, probe_alignment=probe_alignment,
-              probe_scan=probe_scan, probe_stroke=probe_stroke, probe_guidance=probe_guidance)
+              probe_scan=probe_scan, probe_stroke=probe_stroke, probe_guidance=probe_guidance, probe_contact=probe_contact_settings)
 
 
 class OperatorSettings(Node):
@@ -106,7 +106,12 @@ class OperatorSettings(Node):
             if not isinstance(section, str) or section not in SHARED:
                 raise ValueError('Unknown shared settings section')
             value = SHARED[section].validate(command.get('value'))
-            configuration.save_section(self.path, section, value)
+            if section == 'probe_contact':
+                saved = configuration.load(self.path)
+                value['zero_counts'] = saved.get(section,{}).get('zero_counts')
+                configuration.save_section(self.path, section, value, saved.get('revision',0))
+            else:
+                configuration.save_section(self.path, section, value)
             result = dict(ok=True, message=('Camera defaults saved. Restart camera nodes for capture changes.'
                                             if section == 'cameras' else 'Saved on car.'))
         except (OSError, ValueError, TypeError) as exc:

@@ -12,14 +12,14 @@ class SettingsClient:
         self.pending = None
         node.create_timer(.1, self.check_timeout)
 
-    def save(self, section, value, complete):
+    def save(self, section, value, complete, expected_revision=None):
         if self.pending:
             raise ValueError('A settings save is already pending')
         if not self.client.service_is_ready():
             raise ValueError('Settings service unavailable; nothing was saved')
         if getattr(self.node,'simulation',False) and section in ('arm','probe','arm_motion','probe_motion','probe_direction'):
             section += '_simulation'
-        revision = configuration.load(self.path).get('revision', 0)
+        revision = configuration.load(self.path).get('revision', 0) if expected_revision is None else expected_revision
         request = SaveSettings.Request(section=section, value_json=json.dumps(value, allow_nan=False), expected_revision=revision)
         future = self.client.call_async(request)
         self.pending = future, time.monotonic(), complete

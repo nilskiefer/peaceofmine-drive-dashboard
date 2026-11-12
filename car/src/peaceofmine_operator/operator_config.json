@@ -160,5 +160,10 @@
     "pivot_y_m": 0.3,
     "coil_radius_m": 0.35,
     "probe_radius_m": 0.35
+  },
+  "probe_contact": {
+    "source": "adc",
+    "threshold_counts": null,
+    "zero_counts": null
   }
 }

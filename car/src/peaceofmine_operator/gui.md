@@ -509,3 +509,23 @@ The dashboard reports aiming, settling, and spraying separately. STOP, vehicle m
 The latest requested metal point remains the target until another fresh mark request or clearing the mission log. Browser refresh and lease transfer preserve it. Guidance requires continuous local odometry: process restart, odometry frame changes, or timestamp rollback invalidate the target. A pose reset within the same frame without a timestamp change cannot be detected; restart the operator or clear the mission log after such a reset. Historical GNSS marks cannot restore guidance.
 
 When local odometry is unavailable, **Mark ground** can instead use the current confirmed detector bearing and the saved nozzle offset. This requires a completed Confirm arc, centred fresh RC controls, measured geometry with coil/nozzle radii matching within 5 cm, and an arm angle inside the calibrated limits. It still waits for successful aiming and settling before spraying. Any driving input or changed confirmation cancels the shot; repositioning requires a new confirmation. This mode does not create a world point or enable driving guidance, and records unavailable rover coordinates as null.
+
+
+## ESP32 HX711 probe contact
+
+Connect the ESP32 to the car by USB and use the same normal hardware launch.
+Open **Setup → Probe contact**, select **ESP32 load cell**, and **Save on car**.
+The existing firmware streams raw readings; no weight calibration or device
+identification setup is needed.
+
+With the probe clear, press **Zero**. Watch the graph while pressing/releasing
+the sensor, set **Threshold** in counts, and **Save on car**. Before zeroing the
+graph shows raw counts; afterward it shows change from zero. Contact triggers
+when the magnitude reaches the threshold, records depth and retracts as before.
+Missing/stale data stops extension; it never silently switches back to ADC.
+
+Only `source`, `threshold_counts` and `zero_counts` are stored under
+`probe_contact` in the existing Git-tracked `operator_config.json`. Saving
+updates this local file, not a Git commit. Zero survives restarts/reconnects;
+press Zero again if the unloaded reading changes. Close any serial monitor
+before starting the operator so it can open the ESP32 port.

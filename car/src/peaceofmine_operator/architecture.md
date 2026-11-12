@@ -19,7 +19,8 @@ See [the ROS graph](ros_graph.md) for interfaces and publisher/subscriber diagra
 | `actuator_controller.py` | Nonblocking common lifecycle, typed commands/status, action execution and settings client |
 | `actuator_protocol.py` | Browser optional-field conversion to typed actuator messages |
 | `ads1115_node.py`, `adc_acquisition.py`, `ads1115.py` | Acquisition and configuration application; timestamped typed ADC samples and scalar measurements |
-| `adc_contact.py`, `probe_contact.py` | ADC threshold/hysteresis/debounce and session-only motor contact baseline |
+| `adc_contact.py`, `probe_contact.py` | Selected sensor threshold/hysteresis/debounce and separate session-only motor contact baseline |
+| `loadcell_serial.py`, `probe_contact_settings.py` | HX711 USB readings, raw-count contact source selection, and car-owned zero/threshold settings inside the probe controller |
 | `sensor_serial_node.py`, `sensor_serial.py` | Legacy Arduino/ESP32 serial acquisition (deprecated; replaced by direct I2C ADS1115 ADC reading) |
 | `detector_node.py` | Detector interpretation from direct I2C ADC / fallback, calibrated plot geometry and georeferenced detections |
 | `operator_settings_node.py`, `configuration.py` | Sole runtime file writer; validation, optimistic revisions, migration and atomic persistence |

@@ -51,6 +51,15 @@ class BridgeTest(unittest.TestCase):
             self.bridge._adc_state(envelope)
             self.assertEqual(envelope['probe_contact'].get('filtered_volts'), .65 if expected else None)
 
+    def test_loadcell_force_does_not_replace_adc_voltage_telemetry(self):
+        self.bridge.adc = Mock()
+        self.bridge._actuator_times['probe'] = self.now
+        self.bridge._actuators['probe'] = dict(probe=dict(adc_contact_state=dict(
+            source='esp32', value=50., level=40., fresh=True, detected=True)))
+        envelope = dict(probe_contact=dict(filtered_volts=.65, detected=False))
+        self.bridge._adc_state(envelope)
+        self.assertEqual(envelope['probe_contact'], dict(filtered_volts=.65, detected=False))
+
     def test_history_reconnects_by_cursor_and_stays_out_of_control_frames(self):
         from collections import deque
         self.bridge._detector_history = deque()

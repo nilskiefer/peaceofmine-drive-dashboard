@@ -34,7 +34,10 @@ Follow the load cell's datasheet for **wire colors**. SparkFun documentation
 has differing white/green descriptions; use A+/A- from the board schematic
 and your sensor's signal labels. Leave channel B unused. A three-wire
 half-bridge sensor needs a completed bridge; do not wire it as a four-wire cell.
-The sensor's exact model and colors have not been established for this project.
+For the salvaged scale identified from its original PCB in this project:
+**red → RED/E+, black → BLK/E-, white → GRN/A+, yellow → WHT/A-**.
+Leave the HX711 YLW/shield terminal unconnected for that sensor. Its capacity
+remains unknown.
 
 References: [Seeed pin map](https://wiki.seeedstudio.com/xiao_esp32c6_getting_started/),
 [SparkFun v11 schematic](https://cdn.sparkfun.com/datasheets/Sensors/ForceFlex/SparkFun_HX711_Load_Cell_v11.pdf),
@@ -134,3 +137,16 @@ They check CSV availability, tare, positive and negative calibration, saved
 factor reload, malformed/oversized commands, storage-write errors, sensor
 timeouts, and ADC saturation. They do not verify electrical timing or accuracy;
 those require the wired HX711 and a known test mass.
+
+## Dashboard integration
+
+Connect the ESP32 USB to the car. In **Setup → Probe contact**, select **ESP32
+load cell**, save, press **Zero** with the probe clear, then set a threshold
+using the live counts graph. No mass calibration or device identification is
+needed. The dashboard uses raw counts only; it ignores the standalone gram
+column and `tare`/`calibrate` commands described above.
+
+The source, threshold and zero are saved in the car's Git-tracked
+`operator_config.json`. Saving changes the local file; Git commits/pushes are
+separate. Zero survives reconnects/reboots. Close the serial monitor before
+starting the operator. See [the operator guide](../../src/peaceofmine_operator/gui.md#esp32-hx711-probe-contact).

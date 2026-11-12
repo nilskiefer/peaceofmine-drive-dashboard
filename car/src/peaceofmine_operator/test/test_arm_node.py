@@ -74,6 +74,35 @@ class ActuatorTest(unittest.TestCase):
         rclpy.shutdown()
         self.tmp.cleanup()
 
+    def test_loadcell_zero_is_saved_on_car_and_survives_reconnect(self):
+        from unittest.mock import patch
+        from peaceofmine_operator.probe_contact_settings import DEFAULTS
+        options = {**DEFAULTS,'source':'esp32','threshold_counts':50.}
+        configuration.save_section(self.path,'probe_contact',options)
+        raw = dict(connected=True,fresh=True,raw_counts=1200,error=None)
+        self.probe.simulation = False
+        self.probe.loadcell.last_ms = 100
+        self.probe.loadcell.session = 1
+        try:
+            with patch.object(self.probe.loadcell,'poll'), patch.object(self.probe.loadcell,'snapshot',return_value=raw):
+                self.probe.reload_contact()
+                self.probe.loadcell_command(String(data=json.dumps(dict(action='zero',request_id='zero-test'))))
+                self.assertIsNotNone(self.probe.settings.pending)
+                self.spin(.2)
+                saved = configuration.load(self.path)['probe_contact']
+                self.assertEqual(saved['zero_counts'],1200)
+                self.assertTrue(self.probe.last_command['success'])
+                self.assertEqual(self.probe.loadcell_state()['net_counts'],0)
+                self.probe.loadcell.session += 1
+                self.probe.loadcell.last_ms = 200
+                raw['raw_counts'] = 1250
+                self.probe.poll_loadcell()
+                self.assertEqual(self.probe.loadcell_state()['net_counts'],50)
+                self.assertTrue(self.probe.contact.snapshot()['detected'])
+                self.assertEqual(configuration.load(self.path)['probe_contact'],saved)
+        finally:
+            self.probe.simulation = True
+
     def test_manual_handoff_and_stale_input_do_not_abort_new_action(self):
         from unittest.mock import patch
         from peaceofmine_operator.actuator_protocol import command_message

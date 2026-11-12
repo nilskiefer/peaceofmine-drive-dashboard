@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """Probe homing, depth and contact policy over typed driver telemetry."""
+import json
 import math
 import time
-from std_msgs.msg import Bool, Float32
+from std_msgs.msg import Bool, Float32, String
 from peaceofmine_interfaces.msg import AdcSamples, ContactState
 from peaceofmine_interfaces.action import ActuatorOperation
 from peaceofmine_operator.actuator_controller import ActuatorController
 from peaceofmine_operator.adc_acquisition import saved_contact_trigger
 from peaceofmine_operator.adc_contact import AdcContact
 from peaceofmine_operator.probe_contact import ProbeContact
+from peaceofmine_operator.loadcell_serial import LoadCellSerial
+from peaceofmine_operator import probe_contact_settings
 from peaceofmine_operator import configuration, probe_calibration, probe_stroke
 from peaceofmine_operator.node_runner import run_node
 
@@ -50,7 +53,12 @@ class ProbeController(ActuatorController):
         self.load_contact = ProbeContact()
         self.hold_target = True
         self.adc_revision = 0
+        self.contact_settings = dict(probe_contact_settings.DEFAULTS)
+        self.contact_config_valid = False
+        self.loadcell = LoadCellSerial()
         self.reload_contact()
+        self.create_subscription(String, 'probe/loadcell_command', self.loadcell_command, 10)
+        self.create_timer(.05, self.poll_loadcell)
         self.depth_pub = self.create_publisher(Float32, 'probe/depth_mm', 10)
         self.pressure_pub = self.create_publisher(Float32, 'probe/pressure_ratio', 10)
         self.contact_pub = self.create_publisher(ContactState, 'probe/contact', 1)
@@ -80,12 +88,33 @@ class ProbeController(ActuatorController):
             self.apply_probe_motion(self.saved['probe_motion'])
 
     def reload_contact(self):
+        if self.settings.pending:
+            return
+        self.contact_config_valid = False
         try:
             saved = configuration.load(self.config_file)
         except (ValueError,OSError) as exc:
             self.contact.received=0.
-            self.reason=str(exc)
+            self.stop('Contact settings unavailable: '+str(exc))
             return
+        try:
+            options = probe_contact_settings.validate(saved.get('probe_contact', probe_contact_settings.DEFAULTS))
+        except (ValueError, TypeError) as exc:
+            self.contact.received = 0.
+            self.stop('Invalid contact settings: '+str(exc))
+            return
+        if options != self.contact_settings:
+            if self.operation:
+                self.stop('Contact settings changed; start again')
+            self.contact.received = 0.
+            self.contact_settings = options
+        if options['source'] == 'esp32':
+            self.contact.configure(dict(enabled=options['threshold_counts'] is not None, mux=0, level=options['threshold_counts'] or 0.,
+                direction='above', hysteresis=0., debounce_ms=0.))
+            self.contact_config_valid = True
+            return
+        if self.loadcell.connection is not None:
+            self.loadcell.close('ADC contact selected')
         adc = saved.get('adc_simulation' if self.simulation else 'adc', {})
         config = adc.get('config', {})
         scan = sum(c['enabled'] for c in config.get('channels', []))/config.get('rate',128)
@@ -95,8 +124,64 @@ class ProbeController(ActuatorController):
         if revision != self.adc_revision:
             self.contact.received=0.
         self.adc_revision=revision
+        self.contact_config_valid = True
+
+    def poll_loadcell(self):
+        if self.contact_config_valid and self.contact_settings['source'] == 'esp32':
+            if self.simulation:
+                self.loadcell.error = 'ESP32 load cell requires the hardware launch (is_sim:=false)'
+                self.contact.received = 0.
+            else:
+                self.loadcell.poll()
+                state = self.loadcell_state()
+                if state['fresh'] and state['net_counts'] is not None and not state['busy']:
+                    self.contact.sample(abs(state['net_counts']), self.loadcell.last_ms, self.loadcell.session)
+                else:
+                    self.contact.received = 0.
+
+    def loadcell_state(self, include_history=False):
+        state = self.loadcell.snapshot(include_history)
+        zero = self.contact_settings['zero_counts']
+        zeroed = zero is not None
+        return dict(**state, zeroed=zeroed,
+                    net_counts=state['raw_counts']-zero if state['fresh'] and zeroed else None,
+                    busy=bool(self.settings.pending))
+
+    def loadcell_command(self, msg):
+        command = {}
+        try:
+            command = json.loads(msg.data)
+            if not isinstance(command, dict) or command.get('action') != 'zero':
+                raise ValueError('Expected load-cell zero command')
+            if self.simulation or not self.contact_config_valid or self.contact_settings['source'] != 'esp32':
+                raise ValueError('Select ESP32 contact on the physical car first')
+            if self.operation or (self.telemetry and self.telemetry.torque):
+                raise ValueError('Stop and release probe torque before zeroing')
+            state = self.loadcell.snapshot()
+            if not state['fresh']:
+                raise ValueError('Fresh load-cell reading required to zero')
+            saved = configuration.load(self.config_file)
+            options = probe_contact_settings.validate(saved.get('probe_contact',probe_contact_settings.DEFAULTS))
+            if options['source'] != 'esp32':
+                raise ValueError('Contact source changed; wait for the selected load cell')
+            value = dict(options, zero_counts=state['raw_counts'])
+            self.contact.received = 0.
+            def complete(ok, message):
+                if ok:
+                    self.reload_contact()
+                self.reply(command, ok, 'Zero saved on car.' if ok else message)
+            self.settings.save('probe_contact', value, complete, expected_revision=saved.get('revision',0))
+        except (ValueError, TypeError, OSError) as exc:
+            self.contact.received = 0.
+            self.reply(command if isinstance(command,dict) else {}, False, str(exc))
+
+    def destroy_node(self):
+        self.loadcell.close('Probe controller shutting down')
+        return super().destroy_node()
 
     def adc_cb(self, msg):
+        if not self.contact_config_valid or self.contact_settings['source'] != 'adc':
+            return
         if not msg.valid:
             self.contact.received=0.
             return
@@ -110,7 +195,7 @@ class ProbeController(ActuatorController):
                 self.contact.sample(sample.scaled, sample.sequence, (msg.session, msg.config_revision), sample.volts)
 
     def interlock(self):
-        return super().interlock() and not self.fault
+        return super().interlock() and not self.fault and self.contact_config_valid and not self.settings.pending
 
     def calibration(self):
         return None
@@ -203,7 +288,7 @@ class ProbeController(ActuatorController):
             raise ValueError('Stop the current probe operation first')
         contact = self.contact.snapshot()
         if not contact['enabled'] or not contact['fresh']:
-            raise ValueError('Enable a fresh ADC contact input before probing')
+            raise ValueError('Configure the selected contact sensor and wait for fresh zeroed readings before probing')
         self.cycle_target_depth = float(depth)
         self.at_cycle_depth = False
         self.contact_detected = bool(contact['detected'])
@@ -441,6 +526,8 @@ class ProbeController(ActuatorController):
             self.history.append((now,ratio))
         self.history = [(t,v) for t,v in self.history if now-t<=30][-700:]
         contact = self.contact.snapshot()
+        contact['source'] = self.contact_settings['source']
+        contact['units'] = 'counts' if contact['source'] == 'esp32' else 'V'
         if isinstance(self.contact.session, tuple):
             contact['source_session'], contact['source_revision'] = self.contact.session
         msg = ContactState(valid=contact['fresh'], detected=contact['detected'] is True,
@@ -466,7 +553,7 @@ class ProbeController(ActuatorController):
                 contact_detected=self.contact_detected, contact_depth_mm=self.contact_depth_mm, contact_volts=self.contact_volts, last_result=self.last_probe_result,
                 reason=self.reason, fault=self.fault, pressure_ratio=ratio, pressure_window_s=30, history_time_s=wall_now,
                 **({'pressure_samples':[dict(x=t-now,y=v*100) for t,v in self.history]} if include_history else {}),
-                **self.load_contact.snapshot(now, include_history), adc_contact=contact['detected'], adc_contact_fresh=contact['fresh'], adc_contact_state=contact))
+                **self.load_contact.snapshot(now, include_history), loadcell=self.loadcell_state(include_history), adc_contact=contact['detected'], adc_contact_fresh=contact['fresh'], adc_contact_state=contact))
 
 
 def main():

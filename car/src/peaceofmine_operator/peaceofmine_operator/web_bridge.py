@@ -139,7 +139,7 @@ class OperatorWebBridge(Node):
     def _adc_state(self, value):
         probe = self._actuators.get('probe', {}).get('probe', {})
         contact = probe.get('adc_contact_state') or {}
-        if (contact and time.monotonic()-self._actuator_times.get('probe',0) < .5
+        if (contact and contact.get('source') != 'esp32' and time.monotonic()-self._actuator_times.get('probe',0) < .5
                 and contact.get('source_session', value.get('session')) == value.get('session')
                 and contact.get('source_revision', value.get('saved_config_revision')) == value.get('saved_config_revision')):
             value['probe_contact'] = contact
@@ -213,7 +213,7 @@ class OperatorWebBridge(Node):
             kind = payload.get('type')
             if kind in ('probe_target', 'probe_zero_contact', 'start_probe_cycle', 'probe_cycle', 'align_probe'):
                 kind = 'actuator'
-            if kind in ('adc', 'settings', 'actuator'):
+            if kind in ('adc', 'settings', 'actuator', 'loadcell'):
                 if len(self._requests) >= 8:
                     return dict(type='error' if kind == 'actuator' else kind+'_result', section=payload.get('section'), ok=False, message='Configuration requests are pending.')
                 request_id = 'webreq-' + uuid.uuid4().hex

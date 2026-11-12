@@ -281,6 +281,15 @@ assert($('adc-status').textContent==='DISCONNECTED', 'network failure surfaced')
 state.connected=false;drawManualProbeHistory();
 assert($('manual-probe-status').textContent.includes('offline') && $('manual-probe-status').textContent.includes('Depth unavailable') && measuredDepth.data.length===0,'mission chart identifies offline voltage and missing depth');
 assert(document.querySelector('.probe-diagnostics-panel').contains($('manual-probe-history')) && !$('probe-diagnostics').contains($('manual-probe-history')), 'chart sits directly beneath Manual probe outside motor diagnostics');
+state.connected=true;state.drive.you_control_owner=true;
+state.settings.probe_contact={source:'esp32',threshold_counts:25,zero_counts:12300};
+state.probe.loadcell={connected:true,fresh:true,zeroed:true,busy:false,net_counts:45,raw_counts:12345};
+state.probe.adc_contact_state={source:'esp32',enabled:true,fresh:true,detected:false,level:25};
+updateHud();
+window.fetch=async()=>({ok:true,json:async()=>adcResponse});await window.nextPoll();
+for(const id of ['probe-map-sensor','probe-adc-contact','adc-trigger-state']) assert($(id).textContent.includes('45 counts') && $(id).textContent.includes('ESP32'),'ADC receive preserves selected load-cell status: '+id);
+window.fetch=async()=>{throw Error('ADC offline');};await window.nextPoll();
+for(const id of ['probe-map-sensor','probe-adc-contact','adc-trigger-state']) assert($(id).textContent.includes('45 counts') && $(id).textContent.includes('ESP32'),'ADC failure preserves selected load-cell status: '+id);
 document.body.textContent='ADC BROWSER TESTS PASSED';
 '''
         html = re.sub(r'<script src="/?assets/[^"]+"></script>', '', (DASHBOARD/'index.html').read_text())
