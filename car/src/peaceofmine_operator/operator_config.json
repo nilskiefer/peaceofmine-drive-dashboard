@@ -16,7 +16,7 @@
     "reference_voltage": 5.0
   },
   "schema_version": 1,
-  "revision": 104,
+  "revision": 140,
   "section_revisions": {
     "arm": 104,
     "adc": 33,
@@ -30,7 +30,8 @@
     "probe_contact": 102,
     "probe": 75,
     "probe_scan": 78,
-    "probe_alignment": 82
+    "probe_alignment": 82,
+    "drive_speed": 140
   },
   "adc": {
     "config": {
@@ -178,5 +179,12 @@
   },
   "probe_alignment": {
     "offset_deg": 40.0
+  },
+  "drive_speed": {
+    "mode": "closed_loop",
+    "kp": 20.0,
+    "ki": 30.0,
+    "max_speed_mps": 0.1,
+    "max_output_percent": 90.0
   }
 }
