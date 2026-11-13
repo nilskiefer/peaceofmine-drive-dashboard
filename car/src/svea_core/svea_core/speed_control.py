@@ -6,7 +6,7 @@ DEFAULTS = dict(mode='open_loop', kp=20., ki=5., max_speed_mps=.8, max_output_pe
 FEEDBACK_TIMEOUT = .5
 SPEED_WINDOW = .2
 MAX_WHEEL_SPEED = 5.  # Above the vehicle's physical speed, even in high gear.
-NO_MOTION_TIMEOUT = 3.
+NO_MOTION_TIMEOUT = 10.
 
 
 def validate(value):
@@ -134,7 +134,7 @@ class SpeedController:
                     if encoder['measured_mps']<.005:
                         if self.no_motion_since is None:self.no_motion_since=now
                         if now-self.no_motion_since>=NO_MOTION_TIMEOUT:
-                            self.fault='No encoder movement for 3 s; release drive and check wheels/encoders'
+                            self.fault=f'No encoder movement for {NO_MOTION_TIMEOUT:g} s; release drive and check wheels/encoders'
                             encoder.update(health='no_motion',reason=self.fault)
                     else:
                         self.no_motion_since=None

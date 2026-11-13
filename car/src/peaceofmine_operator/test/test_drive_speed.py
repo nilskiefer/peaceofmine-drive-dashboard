@@ -68,12 +68,14 @@ class SpeedControlTest(unittest.TestCase):
 
     def test_no_wheel_movement_fault_and_anti_windup(self):
         controller=SpeedController(dict(DEFAULTS,mode='closed_loop',max_output_percent=20.,kp=1000.,ki=100.))
-        for i in range(40):
+        for i in range(110):
             now=i*.1
             controller.feedback.distance(1_000_000_000+round(now*1e9),[0.,0.],now)
             state=controller.step(.8 if i>1 else 0.,now)
             self.assertLessEqual(state['throttle_percent'],20.)
             self.assertEqual(controller.integral,0.)
+            if now<10.2:
+                self.assertNotEqual(state['state'],'encoder_fault')
         self.assertEqual(state['state'],'encoder_fault')
         self.assertEqual(state['encoder']['health'],'no_motion')
         self.assertEqual(state['throttle_percent'],0.)

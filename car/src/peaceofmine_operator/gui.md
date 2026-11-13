@@ -228,7 +228,7 @@ saving. A changed mode/gain requires a neutral command before restarting.
 The drive-bar badge and Setup show mode, target/measured speed, throttle, each
 wheel speed, chosen wheel, output limiting and encoder health. Closed loop
 neutralizes output when feedback is missing, invalid, older than 0.5 s, or shows
-no motion for 3 s while a nonzero speed is commanded. Encoder recovery does not
+no motion for 10 s while a nonzero speed is commanded. Encoder recovery does not
 restart a held drive command: release to neutral first. Select Open loop to
 operate without encoders. The existing deadman, RC/PX4 authority, downstream
 command timeout and shutdown-neutral behavior remain independent of PI. Raw
