@@ -11,12 +11,13 @@ from rclpy.node import Node
 from std_msgs.msg import String
 from peaceofmine_operator import configuration, camera_settings, arm_sweep
 from peaceofmine_operator.node_runner import run_node
+from svea_core import speed_control as drive_speed
 from peaceofmine_operator.detector import calibration_values
 
 
 from peaceofmine_operator import display_settings, driving_settings, field_gnss, inspection, marking_settings, probe_alignment, probe_scan, probe_stroke, probe_guidance, probe_contact_settings
 
-SHARED = dict(arm_sweep=arm_sweep,cameras=camera_settings, display=display_settings, driving=driving_settings,
+SHARED = dict(drive_speed=drive_speed,arm_sweep=arm_sweep,cameras=camera_settings, display=display_settings, driving=driving_settings,
               gnss=field_gnss, inspection=inspection, marking=marking_settings, probe_alignment=probe_alignment,
               probe_scan=probe_scan, probe_stroke=probe_stroke, probe_guidance=probe_guidance, probe_contact=probe_contact_settings)
 

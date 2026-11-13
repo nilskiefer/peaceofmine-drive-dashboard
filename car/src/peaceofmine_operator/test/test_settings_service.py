@@ -11,6 +11,28 @@ from test_arm_node import module
 
 
 class SettingsServiceTest(unittest.TestCase):
+    def test_drive_speed_mode_and_pi_gains_survive_restart(self):
+        from svea_core.speed_control import DEFAULTS
+        rclpy.init()
+        with tempfile.TemporaryDirectory() as tmp:
+            path=str(Path(tmp)/'operator_config.json')
+            params=[Parameter('config_file',value=path)]
+            node_type=module('operator_settings_node').OperatorSettings
+            node=node_type(parameter_overrides=params)
+            try:
+                value=dict(DEFAULTS,mode='closed_loop',kp=18.,ki=2.,max_speed_mps=.6,max_output_percent=35.)
+                node.command(String(data=json.dumps(dict(request_id='speed',section='drive_speed',value=value))))
+                self.assertEqual(configuration.load(path)['drive_speed'],value)
+                invalid=SaveSettings.Request(section='drive_speed',value_json=json.dumps(dict(value,ki=-1.)))
+                self.assertFalse(node.save(invalid,SaveSettings.Response()).success)
+                self.assertEqual(configuration.load(path)['drive_speed'],value)
+                node.destroy_node()
+                node=node_type(parameter_overrides=params)
+                self.assertEqual(node.shared['drive_speed'],value)
+            finally:
+                node.destroy_node()
+                rclpy.shutdown()
+
     def test_sweep_range_is_saved_separately_and_cannot_exceed_physical_arm(self):
         rclpy.init()
         with tempfile.TemporaryDirectory() as tmp:

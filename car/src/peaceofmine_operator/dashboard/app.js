@@ -1300,6 +1300,7 @@ function updateProbeGuidance() {
 function updateHud() {
   updateProbeGuidance();
   updateAlignmentSettings();
+  updateSpeedControl();
   updatePower();
   updateArmSettings();
   updateMetalSettings();
@@ -3059,21 +3060,26 @@ function initializeCameraSettings() {
   requestAnimationFrame(previewLoop);
 }
 
-function armSetupForm({section, fields, save, status, describe, invalid, applies, preview, allowUnset = false, readSaved, validate, unavailable = 'Waiting for car settings.', record = {}, readRecord}) {
+function armSetupForm({section, fields, save, status, describe, invalid, applies, preview, allowUnset = false, readSaved, validate, saveBlocked, unavailable = 'Waiting for car settings.', record = {}, readRecord}) {
   const inputs = Object.entries(fields).map(([key, id]) => [key, $(id)]);
   const button = $(save), feedback = $(status);
-  let dirty = false, pending = null, message = '';
+  let dirty = false, pending = null, message = '', rejected = false;
+  const isSelect = input => input.tagName === 'SELECT';
+  const readValue = input => isSelect(input) ? input.value : input.valueAsNumber;
+  const savedValueValid = (input, value) => isSelect(input)
+    ? [...input.options].some(option => option.value === value) : Number.isFinite(value);
 
   function render() {
     const stored = state.settings?.[section];
     const saved = readSaved ? readSaved(stored) : stored;
-    const available = state.connected && inputs.every(([key]) => Number.isFinite(saved?.[key]));
+    const available = state.connected && inputs.every(([key, input]) => savedValueValid(input, saved?.[key]));
     const editable = available || (allowUnset && state.connected && Object.hasOwn(state.settings || {}, section));
     const owner = state.connected && state.drive.you_control_owner;
     if (!owner) {
       pending = null;
       dirty = false;
       message = '';
+      rejected = false;
     } else if (pending) {
       if (available && inputs.every(([key]) => pending.value[key] === stored?.[key])) {
         pending = null;
@@ -3082,12 +3088,14 @@ function armSetupForm({section, fields, save, status, describe, invalid, applies
       } else if (performance.now() - pending.at > 4000) {
         pending = null;
         message = 'No save confirmation. Check the car settings and retry.';
+        rejected = true;
       }
     }
     for (const [key, input] of inputs) {
       const value = available ? String(saved[key]) : '';
       if (!dirty && input.value !== value) input.value = value;
       input.readOnly = !owner || !editable || Boolean(pending);
+      if (isSelect(input)) input.disabled = input.readOnly;
       input.setCustomValidity('');
       if (input.hasAttribute('data-positive'))
         input.setCustomValidity(input.valueAsNumber <= 0 ? 'Enter a value greater than zero.' : '');
@@ -3097,25 +3105,28 @@ function armSetupForm({section, fields, save, status, describe, invalid, applies
       if (slow.valueAsNumber > $('probe-retract-speed').valueAsNumber)
         slow.setCustomValidity('Slow retract must not exceed fast retract.');
     }
-    const values = Object.fromEntries(inputs.map(([key, input]) => [key, input.valueAsNumber]));
+    const values = Object.fromEntries(inputs.map(([key, input]) => [key, readValue(input)]));
     const errors = validate?.(values) || {};
     for (const [key, input] of inputs) {
       if (errors[key]) input.setCustomValidity(errors[key]);
       if (record[key]) $(record[key]).disabled = input.readOnly || !Number.isFinite(readRecord?.());
     }
-    const valid = inputs.every(([, input]) => Number.isFinite(input.valueAsNumber) && input.validity.valid);
-    const changed = editable && (!available || inputs.some(([key, input]) => !Number.isFinite(stored?.[key]) || input.valueAsNumber !== saved[key]));
-    button.disabled = !owner || !editable || Boolean(pending) || !valid || !changed;
+    const valid = inputs.every(([, input]) => savedValueValid(input, readValue(input)) && input.validity.valid);
+    const changed = editable && (!available || inputs.some(([key, input]) => !savedValueValid(input, stored?.[key]) || readValue(input) !== saved[key]));
+    const blocked = saveBlocked?.() || '';
+    button.disabled = !owner || !editable || Boolean(pending) || !valid || !changed || Boolean(blocked);
     feedback.textContent = !editable ? unavailable
       : !owner ? 'Take control to edit.'
-      : pending ? 'Saving…' : message
+      : pending ? 'Saving…' : message || blocked
       || (!valid ? invalid : changed ? available ? `Unsaved change. The car uses ${describe(saved)}.` : 'Save all four measurements to enable guidance.' : applies);
+    feedback.dataset.kind = rejected ? 'error' : pending || (owner && changed) ? 'pending' : '';
     preview?.();
   }
 
   for (const [, input] of inputs) input.oninput = () => {
     dirty = true;
     message = '';
+    rejected = false;
     render();
   };
   for (const [key, input] of inputs) if (record[key]) $(record[key]).onclick = () => {
@@ -3126,7 +3137,8 @@ function armSetupForm({section, fields, save, status, describe, invalid, applies
   };
   button.onclick = () => {
     if (button.disabled || !inputs.every(([, input]) => input.reportValidity())) return;
-    const value = Object.fromEntries(inputs.map(([key, input]) => [key, input.valueAsNumber]));
+    const value = Object.fromEntries(inputs.map(([key, input]) => [key, readValue(input)]));
+    rejected = false;
     pending = {value, at:performance.now()};
     send({type:'settings', section, value});
     render();
@@ -3135,6 +3147,7 @@ function armSetupForm({section, fields, save, status, describe, invalid, applies
     if (pending && !reply.ok) {
       pending = null;
       message = reply.message || 'Save rejected.';
+      rejected = true;
     }
     render();
   }};
@@ -3211,6 +3224,13 @@ function currentArmSweepAngle() {
 }
 
 const armSetupForms = new Map([
+  ['drive_speed', armSetupForm({section:'drive_speed',
+    fields:{mode:'speed-control-mode', kp:'speed-control-kp', ki:'speed-control-ki', max_speed_mps:'speed-control-max-speed', max_output_percent:'speed-control-max-output'},
+    save:'speed-control-save', status:'speed-control-save-status',
+    describe:saved => `${saved.mode === 'closed_loop' ? 'PI' : 'open loop'} with P ${saved.kp}, I ${saved.ki}, ${saved.max_speed_mps} m/s and ${saved.max_output_percent}% limits`,
+    saveBlocked:() => state.drive.cmd_linear_x === 0 && state.drive.cmd_angular_z === 0 ? '' : 'Stop driving before saving speed control.',
+    invalid:'Choose a mode, P and I from 0–1000, a speed from 0.01–1.7 m/s and throttle from 1–90%.',
+    applies:'Saved settings apply to driving.'})],
   ['arm_sweep', armSetupForm({section:'arm_sweep', fields:{minimum_deg:'arm-sweep-minimum', maximum_deg:'arm-sweep-maximum'},
     save:'arm-sweep-save', status:'arm-sweep-status', readSaved:savedArmSweep, validate:validateArmSweep,
     record:{minimum_deg:'arm-sweep-record-minimum', maximum_deg:'arm-sweep-record-maximum'}, readRecord:currentArmSweepAngle,
@@ -3233,6 +3253,52 @@ const armSetupForms = new Map([
     save:'arm-scan-save', status:'arm-scan-status', describe:saved => `${saved.point_count} points at ${saved.spacing_deg}° spacing`,
     invalid:'Enter 1–31 whole points and spacing from 0.1° to 180°.', applies:'Applies to the next probe scan.', preview:showScanCoverage})],
 ]);
+
+function updateSpeedControl() {
+  const control = state.speed_control;
+  const live = state.connected && control?.available === true;
+  const encoder = live ? control.encoder : null;
+  const fresh = encoder?.fresh === true;
+  const health = !fresh && encoder?.health === 'ok' ? 'stale' : encoder?.health || (live ? 'missing' : 'offline');
+  const healthy = fresh && health === 'ok';
+  const mode = live ? control.mode : state.settings?.drive_speed?.mode;
+  const modeLabel = mode === 'closed_loop' ? 'PI' : mode === 'open_loop' ? 'Open loop' : 'Speed';
+  const readable = value => String(value || '').replaceAll('_', ' ');
+  const encoderReason = !live ? state.connected ? 'Speed controller offline.' : 'Disconnected. Encoder data unavailable.'
+    : encoder?.reason || (healthy ? 'Encoder feedback ready.' : `Encoder ${readable(health)}.`);
+  const fault = live && ['encoder_fault', 'neutral_required', 'settings_error'].includes(control.state);
+  const encoderFault = health === 'no_motion';
+  const kind = fault || encoderFault ? 'error' : !healthy || control?.output_limited ? 'pending' : 'success';
+  const badge = $('drive-speed-status');
+  badge.className = `badge ${fault || encoderFault ? 'blocked' : !healthy ? 'warn' : 'safe'}`;
+  const badgeReason = fault ? control.reason || readable(control.state) : encoderReason;
+  badge.textContent = `${modeLabel} · ${fault ? control.state === 'settings_error' ? 'settings error' : 'release drive' : `encoder ${healthy ? 'OK' : readable(health)}`}`;
+  badge.setAttribute('aria-label', `Speed control setup: ${modeLabel}. ${badgeReason}`);
+  badge.dataset.tip = `${badgeReason} Open speed control setup.`;
+  const controllerState = $('speed-control-state');
+  controllerState.textContent = live ? readable(control.state || 'unknown').toUpperCase() : 'OFFLINE';
+  controllerState.className = `badge ${fault ? 'blocked' : !live || control.output_limited ? 'warn' : 'neutral'}`;
+  const feedback = $('speed-control-feedback');
+  feedback.textContent = live ? control.reason || readable(control.state) || 'Speed controller ready.' : encoderReason;
+  if (live && mode === 'closed_loop' && state.settings?.drive_speed?.kp === 0 && state.settings?.drive_speed?.ki === 0)
+    feedback.textContent += ' P and I are zero: no feedback correction.';
+  feedback.dataset.kind = kind;
+  const encoderBadge = $('speed-encoder-health');
+  encoderBadge.textContent = readable(health).toUpperCase();
+  encoderBadge.className = `badge ${encoderFault ? 'blocked' : healthy ? 'safe' : 'warn'}`;
+  $('speed-encoder-reason').textContent = encoderReason;
+  $('speed-encoder-reason').dataset.kind = encoderFault ? 'error' : healthy ? 'success' : 'pending';
+  const number = (value, available, digits = 2) => available && Number.isFinite(value) ? value.toFixed(digits) : '—';
+  for (const [id, key] of [['target','target_mps'], ['throttle','throttle_percent'], ['p','p_percent'], ['i','i_percent']])
+    $(`speed-control-${id}`).textContent = number(control?.[key], live);
+  $('speed-control-measured').textContent = number(control?.measured_mps, live && fresh);
+  $('speed-encoder-left').textContent = number(encoder?.left_mps, live && fresh);
+  $('speed-encoder-right').textContent = number(encoder?.right_mps, live && fresh);
+  $('speed-encoder-selected').textContent = live && fresh && ['left','right'].includes(encoder?.selected)
+    ? encoder.selected === 'left' ? 'Left' : 'Right' : '—';
+  $('speed-control-limited').textContent = live && typeof control.output_limited === 'boolean'
+    ? control.output_limited ? 'Limited' : 'Within limit' : '—';
+}
 
 function updateAlignmentSettings() {
   armSetupForms.forEach(form => form.render());

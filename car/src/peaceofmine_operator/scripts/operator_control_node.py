@@ -21,6 +21,7 @@ from peaceofmine_operator import marking_settings
 from peaceofmine_operator.rc_safety import RcSafety
 from peaceofmine_operator.transport_clock import transport_age
 from peaceofmine_operator import driving_settings, inspection, probe_alignment, probe_scan, probe_guidance, arm_sweep
+from svea_core import speed_control as drive_speed
 from peaceofmine_operator.detector import DetectorTelemetry
 from peaceofmine_operator.inspection import InspectionWorkflow
 from peaceofmine_interfaces.action import ActuatorOperation
@@ -385,15 +386,19 @@ class OperatorControl(Node):
 
     def _drive_settings_cb(self, message):
         try:
-            settings = driving_settings.validate(json.loads(message.data)['driving'])
+            document=json.loads(message.data)
+            settings = driving_settings.validate(document['driving'])
+            maximum=drive_speed.validate(document['drive_speed'])['max_speed_mps'] if 'drive_speed' in document else self._max_velocity
             selected = settings['input']
             limits = (settings['reverse_percent'] / 100., settings['forward_percent'] / 100.)
         except (KeyError, TypeError, ValueError):
             return
         with self._lock:
+            maximum_changed=maximum!=self._max_velocity
+            self._max_velocity=maximum
             limits_changed = limits != self._keyboard_limits
             self._keyboard_limits = limits
-            if selected == self._drive_input and (selected != 'keyboard' or not limits_changed):
+            if selected == self._drive_input and not maximum_changed and (selected != 'keyboard' or not limits_changed):
                 return
             self._drive_input = selected
             self._rc_enabled_until = 0.
@@ -1109,7 +1114,7 @@ class OperatorControl(Node):
                 if self._mark_job is not None:
                     self._stop_pump(0., 'Mark cancelled: settings changed.')
                 next_scan_setting = message_type == 'settings' and payload.get('section') in ('inspection', 'probe_alignment', 'probe_scan', 'probe_stroke', 'probe_guidance')
-                if self._inspection.active and not next_scan_setting:
+                if (self._inspection.active and not next_scan_setting) or (message_type=='settings' and payload.get('section')=='drive_speed'):
                     self._stop_motion_locked()
                 publisher = self._adc_command_pub if message_type == 'adc' else self._settings_command_pub
                 publisher.publish(String(data=json.dumps(payload)))

@@ -12,7 +12,7 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from sensor_msgs.msg import NavSatFix, Joy
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import Twist, TwistWithCovarianceStamped
-from mavros_msgs.msg import RCIn, State
+from mavros_msgs.msg import RCIn, State, WheelOdomStamped
 from std_msgs.msg import Bool, String, Float32
 from peaceofmine_interfaces.msg import AdcSamples, ServoState, ServoCommand, ActuatorCommand
 from rosidl_runtime_py.convert import message_to_ordereddict
@@ -62,7 +62,7 @@ class FieldRecorder(Node):
         self.create_subscription(String, 'operator/state', self.motion, 1)
         for topic,source in (('probe/web_state','probe'),('arm/web_state','arm'),
                 ('detector/telemetry','detector'),('adc/state','adc'),
-                ('power/state','power'),('cameras/state','cameras')):
+                ('power/state','power'),('cameras/state','cameras'),('drive/speed_state','speed_control')):
             self.create_subscription(String,topic,lambda msg,name=source:self.telemetry(msg,name),1)
         for topic in ('operator/result','arm/result','probe/result','operator/settings/result','operator/command',
                       'detector/control_state','detector/state','adc/command_result'):
@@ -72,6 +72,8 @@ class FieldRecorder(Node):
                 (Odometry,'odometry/local'),(Twist,'cmd_vel'),(TwistWithCovarianceStamped,'mavros/local_position/velocity_local'),
                 (RCIn,'mavros/rc/in'),(State,'mavros/state'),(Joy,'joy'),(Float32,'actuation/pump_percent')):
             self.create_subscription(message,topic,lambda msg,name=topic:self.raw_telemetry(msg,name),qos_profile_sensor_data)
+        self.create_subscription(WheelOdomStamped,'mavros/wheel_odometry/distance',
+            lambda msg:self.raw_telemetry(msg,'mavros/wheel_odometry/distance'),qos_profile_sensor_data)
         self.create_timer(.1,self.analysis_tick)
         self.create_timer(.5, self.tick)
         self.publish_entries()

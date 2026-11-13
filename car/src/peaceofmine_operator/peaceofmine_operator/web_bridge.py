@@ -29,6 +29,8 @@ class OperatorWebBridge(Node):
         self._cameras_at = 0
         self._power = {}
         self._power_at = 0
+        self._speed_control = None
+        self._speed_control_at = 0.
         self._detector_history = deque()
         self._history_stream = None
         self._detector = {}
@@ -57,6 +59,7 @@ class OperatorWebBridge(Node):
                 ('operator/state', self._control_state), ('operator/result', self._control_result),
                 ('adc/state', self._adc_state), ('adc/command_result', self._device_result),
                 ('cameras/state', self._camera_state), ('power/state', self._power_state),
+                ('drive/speed_state', self._speed_state),
                 ('operator/settings', self._settings_state), ('operator/settings/result', self._device_result)):
             depth = 1 if topic in ('operator/state', 'detector/telemetry', 'arm/web_state', 'probe/web_state') else 10
             self.create_subscription(String, topic, self._json_callback(callback), depth)
@@ -76,6 +79,9 @@ class OperatorWebBridge(Node):
 
     def _field_live(self, value):
         self._field_state, self._field_at = value, time.monotonic()
+
+    def _speed_state(self,value):
+        self._speed_control,self._speed_control_at=value,time.monotonic()
 
     def _field_log(self, value):
         self._field_entries = value
@@ -276,6 +282,10 @@ class OperatorWebBridge(Node):
 
             value['cameras'] = copy.deepcopy(self._camera_frames) if time.monotonic()-self._cameras_at < 1 else {}
             value['power'] = copy.deepcopy(self._power) if time.monotonic()-self._power_at < 1 else {}
+            value['speed_control'] = (copy.deepcopy(self._speed_control)
+                if time.monotonic()-getattr(self,'_speed_control_at',0.) < .5 and getattr(self,'_speed_control',None)
+                else dict(available=False,mode=None,state='offline',reason='Speed controller offline',
+                          encoder=dict(fresh=False,health='offline',reason='Speed controller offline')))
             value['settings'] = copy.deepcopy(self._settings) if time.monotonic()-self._settings_at < 2 else None
             return value
 

@@ -476,6 +476,7 @@ main { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: var(--gap); 
 #drive-block.ready { color: var(--accent-text); }
 #drive-block.blocked { color: var(--warn); }
 .drive-bar > .badge, .drive-bar > button { flex: none; }
+#drive-speed-status { max-width: 14rem; white-space: normal; text-align: left; letter-spacing: normal; }
 
 /* ------------------------------------------------------------- Dock ---
  * One card: tab row on top, the selected pane below. Panes split into

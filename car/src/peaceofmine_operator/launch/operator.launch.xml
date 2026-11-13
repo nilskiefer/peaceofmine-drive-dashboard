@@ -144,6 +144,7 @@
     </group>
     </group>
     <node pkg="svea_examples" exec="twist_consumer.py" name="operator_twist_consumer" output="screen">
+      <param name="config_file" value="$(var config_file)" type="str"/>
       <param name="twist_top" value="cmd_vel"/>
       <param name="require_px4_armed" value="$(eval '&quot;$(var is_sim)&quot; != &quot;true&quot;')"/>
       <param name="max_velocity" value="$(var max_velocity)"/>

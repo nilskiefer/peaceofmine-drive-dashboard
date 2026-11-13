@@ -71,6 +71,7 @@
         </label>
         <div class="drive-text input-state"><p id="controller">Choose an input</p><p id="controller-mapping"></p></div>
         <div class="drive-text drive-feedback"><p id="drive-block">Take control when the RC allows driving.</p><p id="drive-help">Click the camera for WASD · Esc releases the keys · hold Space to sweep</p></div>
+        <button type="button" id="drive-speed-status" class="badge neutral" data-open-settings="speed" aria-label="Speed control setup: waiting for car">Speed · encoder offline</button>
         <span id="arm-state" class="badge neutral">DISARMED</span>
         <button type="button" class="quiet" data-open-settings="input">Input setup</button>
       </div>
@@ -322,6 +323,7 @@
       <nav class="setup-nav" aria-label="Settings sections" role="tablist" aria-orientation="vertical">
         <p class="setup-nav-group" aria-hidden="true">Driving</p>
         <button type="button" class="settings-tab active" role="tab" aria-selected="true" aria-controls="settings-input" data-settings-tab="input">Controls</button>
+        <button type="button" class="settings-tab" role="tab" aria-selected="false" aria-controls="settings-speed" data-settings-tab="speed">Speed control</button>
         <button type="button" class="settings-tab" role="tab" aria-selected="false" aria-controls="settings-cameras" data-settings-tab="cameras">Cameras</button>
         <p class="setup-nav-group" aria-hidden="true">Payload</p>
         <button type="button" class="settings-tab" role="tab" aria-selected="false" aria-controls="settings-arm" data-settings-tab="arm">Arm</button>
@@ -402,6 +404,58 @@
               <li>Plug the device into this laptop and press a button.</li>
               <li>Still missing? Check it in the <a href="https://googlechrome.github.io/samples/gamepad-demo/" target="_blank" rel="noopener">Chrome gamepad tester</a>.</li>
             </ol>
+          </div>
+        </details>
+      </section>
+
+      <!-- ======================================================= Speed control -->
+      <section id="settings-speed" class="settings-panel" role="tabpanel" data-settings-panel="speed" hidden>
+        <header class="panel-head">
+          <h3>Speed control <span class="tip" data-tip="Open loop uses the existing throttle mapping without encoder feedback. Closed loop (PI) corrects speed using the higher valid left or right wheel speed. It assumes straight travel and uses speed magnitude. Stop driving before saving mode, gains or limits."></span></h3>
+          <span id="speed-control-state" class="badge neutral">OFFLINE</span>
+        </header>
+        <div class="status-bar">
+          <p id="speed-control-feedback" class="status-msg" role="status">Waiting for speed controller.</p>
+          <dl class="readouts inline">
+            <div><dt>Target · m/s</dt><dd id="speed-control-target">—</dd></div>
+            <div><dt>Measured · m/s</dt><dd id="speed-control-measured">—</dd></div>
+            <div><dt>Throttle · %</dt><dd id="speed-control-throttle">—</dd></div>
+          </dl>
+        </div>
+        <div class="panel-grid cols-2">
+          <section class="set-card">
+            <header class="card-head"><h4>Controller</h4></header>
+            <label class="field"><span class="field-name">Mode <span class="tip" data-tip="Closed loop stops when encoder feedback is missing, stale or invalid. Release the drive input to neutral before retrying after a feedback fault. Open loop does not require encoders, but their health is still shown."></span></span>
+              <select id="speed-control-mode" required disabled><option value="open_loop">Open loop</option><option value="closed_loop">Closed loop (PI)</option></select>
+            </label>
+            <div class="fields-2">
+              <label class="field"><span class="field-name">P <span class="tip" data-tip="Adds P × speed error to throttle in percentage points. P and I both set to zero produce no feedback correction."></span></span><input id="speed-control-kp" type="number" min="0" max="1000" step="any" required readonly></label>
+              <label class="field"><span class="field-name">I <span class="tip" data-tip="Accumulates correction each second to remove steady speed error. The integral correction resets at stop."></span></span><input id="speed-control-ki" type="number" min="0" max="1000" step="any" required readonly></label>
+            </div>
+            <div class="card-actions"><button id="speed-control-save" type="button" class="primary" disabled aria-describedby="speed-control-save-status">Save speed control</button></div>
+            <p id="speed-control-save-status" class="status-msg" role="status">Waiting for car settings.</p>
+          </section>
+          <section class="set-card">
+            <header class="card-head"><h4>Encoder feedback <span class="tip" data-tip="The higher valid wheel speed is selected for PI feedback. Wheel speeds are magnitudes, not signed vehicle velocity. A stale or invalid value is unavailable here."></span></h4><span id="speed-encoder-health" class="badge neutral">OFFLINE</span></header>
+            <dl class="readouts">
+              <div><dt>Left · m/s</dt><dd id="speed-encoder-left">—</dd></div>
+              <div><dt>Right · m/s</dt><dd id="speed-encoder-right">—</dd></div>
+              <div><dt>Selected wheel</dt><dd id="speed-encoder-selected">—</dd></div>
+            </dl>
+            <p id="speed-encoder-reason" class="status-msg" role="status">Waiting for encoder data.</p>
+            <dl class="readouts">
+              <div><dt>P correction · %</dt><dd id="speed-control-p">—</dd></div>
+              <div><dt>I correction · %</dt><dd id="speed-control-i">—</dd></div>
+              <div><dt>Output limit</dt><dd id="speed-control-limited">—</dd></div>
+            </dl>
+          </section>
+        </div>
+        <details class="set-more"><summary>Limits <span class="tip" data-tip="Maximum target speed and throttle apply to both controller modes. The physical RC switch, deadman and drive timeout still control motion."></span></summary>
+          <div class="set-more-body">
+            <div class="fields-2">
+              <label class="field"><span class="field-name">Maximum target speed <span class="unit">m/s</span></span><input id="speed-control-max-speed" type="number" min="0.01" max="1.7" step="any" required readonly></label>
+              <label class="field"><span class="field-name">Maximum throttle <span class="unit">%</span></span><input id="speed-control-max-output" type="number" min="1" max="90" step="any" required readonly></label>
+            </div>
           </div>
         </details>
       </section>

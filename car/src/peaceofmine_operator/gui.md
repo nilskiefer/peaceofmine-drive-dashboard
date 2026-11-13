@@ -197,6 +197,43 @@ HTTPS for a remote laptop as above.
 
 ## Settings
 
+Setup → **Speed control** selects **Open loop** or **Closed loop (PI)** for
+all ROS drive sources, including RC through ROS, WASD, gamepad and wheel. Direct
+physical RC control keeps its existing authority. Open loop uses the existing
+speed-to-throttle mapping without encoder feedback. New installations remain in
+open loop until the operator saves another mode.
+
+Closed loop uses the higher usable wheel speed. Each speed is derived from the
+individual cumulative-metre counters on `mavros/wheel_odometry/distance`, over a
+short 0.2 s window. This assumes straight travel and uses speed magnitude; drive
+direction comes from the command. Wheel disagreement stays visible even when
+one usable wheel permits control. Implausible jumps above 5 m/s are rejected;
+this selection does not establish that the higher wheel is physically correct.
+
+Only **P** and **I** normally need tuning. P multiplies the speed error to add
+throttle percentage points; I accumulates correction each second to remove a
+persistent speed error. The existing open-loop mapping supplies the baseline.
+For example, P=20 with a 0.1 m/s shortfall adds 2 percentage points. I=5 adds
+0.5 percentage points per second while that error persists. There is no D term.
+The integral resets at neutral, direction changes, settings changes and faults,
+and stops accumulating into a saturated output. An overspeed reduces throttle
+without commanding reverse as a brake.
+
+**Limits** contains maximum target speed and maximum throttle. These settings
+and mode/P/I are saved in `operator_config.json` under `drive_speed`. Defaults
+are open loop, P=20, I=5, 0.8 m/s maximum target and 50% maximum throttle; gains
+are starting values to tune, not a physical calibration. Stop driving before
+saving. A changed mode/gain requires a neutral command before restarting.
+
+The drive-bar badge and Setup show mode, target/measured speed, throttle, each
+wheel speed, chosen wheel, output limiting and encoder health. Closed loop
+neutralizes output when feedback is missing, invalid, older than 0.5 s, or shows
+no motion for 3 s while a nonzero speed is commanded. Encoder recovery does not
+restart a held drive command: release to neutral first. Select Open loop to
+operate without encoders. The existing deadman, RC/PX4 authority, downstream
+command timeout and shutdown-neutral behavior remain independent of PI. Raw
+wheel packets and the full speed-control state are included in mission logs.
+
 Settings has separate Arm (default ID 1) and Probe (default ID 2) panels on the
 shared ArbotiX. Switching requires stopped motion. Reconnect while stopped to
 rescan after connecting a missing servo. The arm's physical range has three
